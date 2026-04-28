@@ -28,7 +28,7 @@
 ### Task Model
 
 - [ ] **TASK-01**: Task has a due date with optional time component (all-day vs timed)
-- [ ] **TASK-02**: Task has priority across 5 levels aligned with Obsidian Tasks emoji schema (🔺⏫🔼🔽⏬)
+- [ ] **TASK-02**: Task has priority across 5 levels aligned with Obsidian Tasks emoji schema (tina)
 - [ ] **TASK-03**: Task has `status: "open" | "done" | "cancelled"` with completion timestamp when marked done
 - [ ] **TASK-04**: User can edit a task in place (text, due, priority, project) without delete+recreate
 - [ ] **TASK-05**: Overdue tasks receive visible treatment (color or icon) in every list view that shows them
@@ -86,7 +86,7 @@
 - [ ] **DASH-01**: Plugin registers a markdown code-block processor for the language `qr-dashboard`; user places `` ```qr-dashboard ` ` `` in their daily note template
 - [ ] **DASH-02**: Plugin does not write into note files and does not auto-create daily notes; presence of the code block is the sole render trigger
 - [ ] **DASH-03**: Dashboard shows three sections: today's meetings (timed from calendar feeds), tasks due today (sorted by priority), and stale owes past the configured threshold
-- [ ] **DASH-04**: Dashboard subscription to `TaskStore.onChange` uses `MarkdownRenderChild` lifecycle; subscriptions clean up in `onunload`; 10 pane open/close cycles leave listener count stable
+- [ ] **DASH-04**: Dashboard subscription to `TaskStore.onChange` uses `markdownRenderChild` lifecycle; subscriptions clean up in `onunload`; 10 pane open/close cycles leave listener count stable
 - [ ] **DASH-05**: Dashboard exposes a "Capture follow-up" action on each meeting row that opens the quick-capture modal pre-populated with `sourceRef.calendarEventId`
 - [ ] **DASH-06**: Dashboard reads current daily-note path via `obsidian-daily-notes-interface` when available; works across user-configured daily-note formats
 - [ ] **DASH-07**: Dashboard shows a "last synced" badge per feed and a visible warning when a feed is stale beyond 2× its TTL
@@ -143,14 +143,97 @@ Explicit boundaries with reasoning (see also `.planning/research/FEATURES.md` an
 
 ## Requirement Count
 
-- v1 requirements: **60** across 10 categories
+- v1 requirements: **73** across 11 categories (DATA 8, CAP 5, TASK 8, INBOX 8, PROJ 4, SCAN 11, CAL 10, DASH 7, OWE 5, NOTIF 3, QUAL 4)
 - Already-shipped preserved: **6** (CAP-01, CAP-02, TASK-07 partial, DATA-05 partial, NOTIF-01, NOTIF-02)
-- New: **54**
+- New: **67**
 
 ## Traceability
 
-(Populated by the roadmapper — each REQ maps to exactly one phase.)
+Every v1 requirement maps to exactly one phase. Coverage: 73/73 (100%).
 
-| REQ-ID | Phase |
-|--------|-------|
-| (pending roadmap) | — |
+| REQ-ID   | Phase   |
+|----------|---------|
+| DATA-01  | Phase 1 |
+| DATA-02  | Phase 1 |
+| DATA-03  | Phase 1 |
+| DATA-04  | Phase 1 |
+| DATA-05  | Phase 1 |
+| DATA-06  | Phase 1 |
+| DATA-07  | Phase 1 |
+| DATA-08  | Phase 1 |
+| CAP-01   | Phase 1 |
+| CAP-02   | Phase 1 |
+| CAP-03   | Phase 2 |
+| CAP-04   | Phase 1 |
+| CAP-05   | Phase 5 |
+| TASK-01  | Phase 2 |
+| TASK-02  | Phase 2 |
+| TASK-03  | Phase 2 |
+| TASK-04  | Phase 2 |
+| TASK-05  | Phase 2 |
+| TASK-06  | Phase 2 |
+| TASK-07  | Phase 1 |
+| TASK-08  | Phase 2 |
+| INBOX-01 | Phase 2 |
+| INBOX-02 | Phase 2 |
+| INBOX-03 | Phase 2 |
+| INBOX-04 | Phase 2 |
+| INBOX-05 | Phase 2 |
+| INBOX-06 | Phase 2 |
+| INBOX-07 | Phase 2 |
+| INBOX-08 | Phase 2 |
+| PROJ-01  | Phase 2 |
+| PROJ-02  | Phase 2 |
+| PROJ-03  | Phase 2 |
+| PROJ-04  | Phase 2 |
+| SCAN-01  | Phase 3 |
+| SCAN-02  | Phase 3 |
+| SCAN-03  | Phase 3 |
+| SCAN-04  | Phase 3 |
+| SCAN-05  | Phase 3 |
+| SCAN-06  | Phase 3 |
+| SCAN-07  | Phase 3 |
+| SCAN-08  | Phase 3 |
+| SCAN-09  | Phase 3 |
+| SCAN-10  | Phase 3 |
+| SCAN-11  | Phase 3 |
+| CAL-01   | Phase 4 |
+| CAL-02   | Phase 4 |
+| CAL-03   | Phase 4 |
+| CAL-04   | Phase 4 |
+| CAL-05   | Phase 4 |
+| CAL-06   | Phase 4 |
+| CAL-07   | Phase 4 |
+| CAL-08   | Phase 4 |
+| CAL-09   | Phase 4 |
+| CAL-10   | Phase 4 |
+| DASH-01  | Phase 5 |
+| DASH-02  | Phase 5 |
+| DASH-03  | Phase 5 |
+| DASH-04  | Phase 5 |
+| DASH-05  | Phase 5 |
+| DASH-06  | Phase 5 |
+| DASH-07  | Phase 5 |
+| OWE-01   | Phase 5 |
+| OWE-02   | Phase 5 |
+| OWE-03   | Phase 5 |
+| OWE-04   | Phase 5 |
+| OWE-05   | Phase 5 |
+| NOTIF-01 | Phase 1 |
+| NOTIF-02 | Phase 1 |
+| NOTIF-03 | Phase 1 |
+| QUAL-01  | Phase 1 |
+| QUAL-02  | Phase 1 |
+| QUAL-03  | Phase 3 |
+| QUAL-04  | Phase 1 |
+
+### Per-Phase Requirement Summary
+
+| Phase | Count | Requirements |
+|-------|-------|--------------|
+| Phase 1: Schema & Store Foundation | 18 | DATA-01..08, CAP-01, CAP-02, CAP-04, TASK-07, NOTIF-01..03, QUAL-01, QUAL-02, QUAL-04 |
+| Phase 2: Inbox UI + Projects | 20 | CAP-03, TASK-01..06, TASK-08, INBOX-01..08, PROJ-01..04 |
+| Phase 3: Code TODO Scanner | 12 | SCAN-01..11, QUAL-03 |
+| Phase 4: Calendar Feeds | 10 | CAL-01..10 |
+| Phase 5: Daily Dashboard + Stale-Owes | 13 | CAP-05, DASH-01..07, OWE-01..05 |
+| **Total** | **73** | 100% coverage, no orphans, no duplicates |

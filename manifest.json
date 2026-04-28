@@ -1,0 +1,9 @@
+{
+  "id": "quick-reminder",
+  "name": "Quick Reminder",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Natural-language task capture with native OS notifications. Hotkey, type 'call mom tomorrow 3pm', get notified.",
+  "author": "schylerryan",
+  "isDesktopOnly": true
+}

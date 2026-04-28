@@ -1,0 +1,198 @@
+/* ============ Quick capture modal ============ */
+.qr-modal .qr-input {
+  width: 100%;
+  padding: 0.6em 0.75em;
+  font-size: 1.05em;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  margin-bottom: 0.75em;
+}
+
+.qr-modal .qr-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.qr-modal .qr-preview {
+  padding: 0.6em 0.75em;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  font-size: 0.9em;
+  min-height: 3.5em;
+}
+
+.qr-preview-row {
+  margin: 0.15em 0;
+}
+
+.qr-preview-label {
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 0.3em;
+}
+
+.qr-preview-muted {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.qr-preview-warn {
+  color: var(--text-warning);
+}
+
+.qr-modal .qr-hint {
+  margin-top: 0.6em;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* ============ List modal (legacy, still available) ============ */
+.qr-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5em 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.qr-list-row:last-child {
+  border-bottom: none;
+}
+
+.qr-list-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.qr-list-title {
+  font-weight: 500;
+}
+
+.qr-list-when {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+/* ============ Sidebar view ============ */
+.qr-view {
+  padding: 0.75em 0.6em;
+}
+
+.qr-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.qr-view-header h3 {
+  margin: 0;
+  font-size: 1em;
+}
+
+.qr-view-add-btn {
+  font-size: 0.8em;
+  padding: 0.25em 0.6em;
+  cursor: pointer;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+}
+
+.qr-view-add-btn:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.qr-view-section {
+  margin-bottom: 1em;
+}
+
+.qr-view-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.35em;
+  padding: 0 0.2em;
+}
+
+.qr-view-section-count {
+  background: var(--background-modifier-border);
+  padding: 0 0.5em;
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+
+.qr-view-empty {
+  padding: 0.5em 0.3em;
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.qr-view-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4em;
+  padding: 0.45em 0.3em;
+  border-radius: 4px;
+}
+
+.qr-view-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.qr-view-row-done .qr-view-row-text {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.qr-view-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.qr-view-row-text {
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.qr-view-row-when {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  margin-top: 0.15em;
+}
+
+.qr-view-row-actions {
+  display: flex;
+  gap: 0.25em;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.qr-view-row-actions button {
+  font-size: 0.75em;
+  padding: 0.2em 0.5em;
+  cursor: pointer;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+}
+
+.qr-view-row-actions button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.qr-view-del {
+  color: var(--text-error) !important;
+}
