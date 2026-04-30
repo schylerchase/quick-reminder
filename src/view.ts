@@ -8,6 +8,7 @@ export const VIEW_TYPE_REMINDER = "quick-reminder-view";
 
 export class ReminderView extends ItemView {
   private refreshHandler = () => this.render();
+  private editingId: string | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -26,7 +27,7 @@ export class ReminderView extends ItemView {
   }
 
   getIcon(): string {
-    return "alarm-clock";
+    return "list-checks";
   }
 
   async onOpen(): Promise<void> {
@@ -43,21 +44,51 @@ export class ReminderView extends ItemView {
     container.empty();
     container.addClass("qr-view");
 
+    const pending = this.store.pending;
+    const now = Date.now();
+    const overdue = pending.filter((r) => r.dueAt <= now);
+    const upcoming = pending.filter((r) => r.dueAt > now);
+    const allDone = this.store.all.filter((r) => r.notified);
+    const done = allDone.slice(-30).reverse();
+
     const header = container.createDiv({ cls: "qr-view-header" });
-    header.createEl("h3", { text: "Reminders" });
-    const addBtn = header.createEl("button", {
-      text: "+ New",
-      cls: "qr-view-add-btn",
+    const title = header.createDiv({ cls: "qr-view-title" });
+    title.createEl("h3", { text: "Reminders" });
+    title.createDiv({
+      text: getSummaryText(overdue.length, upcoming.length),
+      cls: "qr-view-summary",
     });
+
+    const addBtn = header.createEl("button", { text: "New", cls: "qr-view-add-btn" });
     addBtn.onclick = () => {
       new QuickCaptureModal(this.app, this.store, this.scheduler).open();
     };
 
-    const pending = this.store.pending;
-    const done = this.store.all.filter((r) => r.notified).slice(-30).reverse();
+    this.renderStats(container as HTMLElement, overdue.length, upcoming.length, allDone.length);
 
-    this.renderSection(container as HTMLElement, "Pending", pending, false);
+    if (overdue.length > 0) {
+      this.renderSection(container as HTMLElement, "Overdue", overdue, false);
+    }
+    this.renderSection(container as HTMLElement, "Upcoming", upcoming, false);
     this.renderSection(container as HTMLElement, "History", done, true);
+  }
+
+  private renderStats(
+    parent: HTMLElement,
+    overdueCount: number,
+    upcomingCount: number,
+    historyCount: number,
+  ): void {
+    const stats = parent.createDiv({ cls: "qr-view-stats" });
+    this.renderStat(stats, "Overdue", overdueCount, overdueCount > 0);
+    this.renderStat(stats, "Upcoming", upcomingCount);
+    this.renderStat(stats, "Done", historyCount);
+  }
+
+  private renderStat(parent: HTMLElement, label: string, count: number, warn = false): void {
+    const stat = parent.createDiv({ cls: `qr-view-stat ${warn ? "is-warning" : ""}` });
+    stat.createDiv({ text: String(count), cls: "qr-view-stat-number" });
+    stat.createDiv({ text: label, cls: "qr-view-stat-label" });
   }
 
   private renderSection(
@@ -76,7 +107,7 @@ export class ReminderView extends ItemView {
 
     if (items.length === 0) {
       section.createDiv({
-        text: isHistory ? "No past reminders." : "No pending reminders.",
+        text: getEmptyText(title, isHistory),
         cls: "qr-view-empty",
       });
       return;
@@ -91,23 +122,53 @@ export class ReminderView extends ItemView {
     const row = parent.createDiv({ cls: "qr-view-row" });
     row.toggleClass("qr-view-row-done", isHistory);
 
+    if (this.editingId === r.id && !isHistory) {
+      this.renderEditRow(row, r);
+      return;
+    }
+
     const body = row.createDiv({ cls: "qr-view-row-body" });
     body.createDiv({ text: r.text, cls: "qr-view-row-text" });
 
-    const whenLabel = formatWhen(r.dueAt, isHistory);
+    const whenLabel = isHistory ? formatHistoryWhen(r) : formatWhen(r.dueAt);
     body.createDiv({ text: whenLabel, cls: "qr-view-row-when" });
 
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
 
     if (!isHistory) {
-      const snoozeBtn = actions.createEl("button", { text: "Snooze" });
+      const doneBtn = actions.createEl("button", { text: "Done", cls: "qr-row-btn qr-done-btn" });
+      doneBtn.onclick = async () => {
+        this.scheduler.cancel(r.id);
+        await this.store.complete(r.id);
+        new Notice("Marked done");
+      };
+
+      const snoozeMinutes = this.store.settings.defaultSnoozeMinutes;
+      const snoozeBtn = actions.createEl("button", {
+        text: `Snooze ${snoozeMinutes}m`,
+        cls: "qr-row-btn",
+      });
+      snoozeBtn.setAttr("aria-label", `Snooze ${snoozeMinutes} minutes`);
       snoozeBtn.onclick = async () => {
-        await this.store.snooze(r.id, this.store.settings.defaultSnoozeMinutes);
+        await this.store.snooze(r.id, snoozeMinutes);
         this.scheduler.scheduleAll();
-        new Notice(`Snoozed ${this.store.settings.defaultSnoozeMinutes}m`);
+        new Notice(`Snoozed ${snoozeMinutes}m`);
+      };
+
+      const editBtn = actions.createEl("button", { text: "Edit", cls: "qr-row-btn" });
+      editBtn.onclick = () => {
+        this.editingId = r.id;
+        this.render();
       };
     } else {
-      const reuseBtn = actions.createEl("button", { text: "Re-add" });
+      const restoreBtn = actions.createEl("button", { text: "Restore", cls: "qr-row-btn" });
+      restoreBtn.onclick = async () => {
+        await this.store.restore(r.id);
+        this.scheduler.scheduleAll();
+        new Notice("Reminder restored");
+      };
+
+      const reuseBtn = actions.createEl("button", { text: "Re-add", cls: "qr-row-btn" });
       reuseBtn.onclick = () => {
         const modal = new QuickCaptureModal(this.app, this.store, this.scheduler);
         modal.open();
@@ -126,8 +187,8 @@ export class ReminderView extends ItemView {
     }
 
     const delBtn = actions.createEl("button", {
-      text: "✕",
-      cls: "qr-view-del",
+      text: "Delete",
+      cls: "qr-row-btn qr-view-del",
     });
     delBtn.setAttr("aria-label", "Delete");
     delBtn.onclick = async () => {
@@ -135,9 +196,60 @@ export class ReminderView extends ItemView {
       await this.store.remove(r.id);
     };
   }
+
+  private renderEditRow(parent: HTMLElement, r: Reminder): void {
+    const editor = parent.createDiv({ cls: "qr-edit-form" });
+    const fields = editor.createDiv({ cls: "qr-edit-fields" });
+    const textInput = fields.createEl("input", { type: "text", cls: "qr-edit-input" });
+    textInput.value = r.text;
+
+    const dueInput = fields.createEl("input", { type: "datetime-local", cls: "qr-edit-input" });
+    dueInput.value = formatInputDate(r.dueAt);
+
+    const actions = editor.createDiv({ cls: "qr-edit-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-row-btn" }).onclick = () => {
+      this.editingId = null;
+      this.render();
+    };
+
+    actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" }).onclick = async () => {
+      const text = textInput.value.trim();
+      const dueAt = new Date(dueInput.value).getTime();
+      if (!text || Number.isNaN(dueAt)) {
+        new Notice("Add a task and valid time.");
+        return;
+      }
+      if (dueAt <= Date.now()) {
+        new Notice("Reminder time must be in the future.");
+        return;
+      }
+      await this.store.updateReminder(r.id, text, dueAt);
+      this.scheduler.scheduleAll();
+      this.editingId = null;
+      new Notice("Reminder updated");
+    };
+
+    window.setTimeout(() => textInput.focus(), 0);
+  }
 }
 
-function formatWhen(ms: number, isHistory: boolean): string {
+function getSummaryText(overdueCount: number, upcomingCount: number): string {
+  if (overdueCount > 0) {
+    return `${overdueCount} overdue · ${upcomingCount} upcoming`;
+  }
+  if (upcomingCount > 0) {
+    return `${upcomingCount} upcoming`;
+  }
+  return "Nothing pending";
+}
+
+function getEmptyText(title: string, isHistory: boolean): string {
+  if (isHistory) return "No past reminders.";
+  if (title === "Upcoming") return "No upcoming reminders.";
+  return "No reminders here.";
+}
+
+function formatWhen(ms: number): string {
   const now = Date.now();
   const diff = ms - now;
   const abs = Math.abs(diff);
@@ -145,21 +257,40 @@ function formatWhen(ms: number, isHistory: boolean): string {
   const hours = Math.round(abs / 3_600_000);
   const days = Math.round(abs / 86_400_000);
 
-  const exact = new Date(ms).toLocaleString(undefined, {
+  const exact = formatExact(ms);
+  if (diff < 0) return `overdue · ${exact}`;
+  if (mins < 60) return `in ${mins}m · ${exact}`;
+  if (hours < 24) return `in ${hours}h · ${exact}`;
+  return `in ${days}d · ${exact}`;
+}
+
+function formatHistoryWhen(reminder: Reminder): string {
+  const completedAt = reminder.completedAt ?? reminder.dueAt;
+  return `${formatAgo(completedAt)} done · due ${formatExact(reminder.dueAt)}`;
+}
+
+function formatAgo(ms: number): string {
+  const abs = Math.abs(Date.now() - ms);
+  const mins = Math.round(abs / 60_000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+}
+
+function formatExact(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
+}
 
-  if (isHistory) {
-    if (mins < 60) return `${mins}m ago · ${exact}`;
-    if (hours < 24) return `${hours}h ago · ${exact}`;
-    return `${days}d ago · ${exact}`;
-  }
-  if (diff < 0) return `overdue · ${exact}`;
-  if (mins < 60) return `in ${mins}m · ${exact}`;
-  if (hours < 24) return `in ${hours}h · ${exact}`;
-  return `in ${days}d · ${exact}`;
+function formatInputDate(ms: number): string {
+  const date = new Date(ms);
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(ms - offsetMs).toISOString().slice(0, 16);
 }

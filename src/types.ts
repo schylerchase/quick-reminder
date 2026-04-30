@@ -5,6 +5,7 @@ export interface Reminder {
   dueAt: number;
   createdAt: number;
   notified: boolean;
+  completedAt?: number;
   snoozedFrom?: number;
 }
 
@@ -19,6 +20,7 @@ export interface Settings {
   defaultSnoozeMinutes: number;
   fireMissedOnLaunch: boolean;
   soundOnNotify: boolean;
+  checkForUpdatesOnLaunch: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -27,4 +29,5 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultSnoozeMinutes: 10,
   fireMissedOnLaunch: true,
   soundOnNotify: true,
+  checkForUpdatesOnLaunch: true,
 };

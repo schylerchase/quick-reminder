@@ -14,10 +14,12 @@ import { QuickCaptureModal, ReminderListModal } from "./modal";
 import { PluginData, Reminder } from "./types";
 import { parseReminder } from "./parser";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
+import { PluginUpdater } from "./updater";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
   scheduler!: Scheduler;
+  updater!: PluginUpdater;
 
   async onload(): Promise<void> {
     this.store = new ReminderStore(
@@ -28,21 +30,15 @@ export default class QuickReminderPlugin extends Plugin {
       },
     );
     await this.store.init();
-
+    this.updater = new PluginUpdater(this.app, this.manifest);
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
     });
-
     this.registerView(
       VIEW_TYPE_REMINDER,
       (leaf) => new ReminderView(leaf, this.store, this.scheduler),
     );
-
-    this.addRibbonIcon("alarm-clock", "Quick Reminder: capture", () => {
-      new QuickCaptureModal(this.app, this.store, this.scheduler).open();
-    });
-
-    this.addRibbonIcon("list", "Quick Reminder: open view", () => {
+    this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
       void this.activateView();
     });
 
@@ -64,9 +60,17 @@ export default class QuickReminderPlugin extends Plugin {
 
     this.addCommand({
       id: "open-view",
-      name: "Open reminders sidebar",
+      name: "Open reminder manager",
       callback: () => {
         void this.activateView();
+      },
+    });
+
+    this.addCommand({
+      id: "update-from-github",
+      name: "Update from latest GitHub release",
+      callback: () => {
+        void this.installLatestRelease();
       },
     });
 
@@ -101,7 +105,7 @@ export default class QuickReminderPlugin extends Plugin {
       }
       await this.scheduler.scanOverdue();
       this.scheduler.scheduleAll();
-      await this.activateView(false);
+      void this.notifyIfUpdateAvailable();
     });
   }
 
@@ -125,6 +129,39 @@ export default class QuickReminderPlugin extends Plugin {
 
     if (reveal && leaf) {
       workspace.revealLeaf(leaf);
+    }
+  }
+
+  async installLatestRelease(): Promise<void> {
+    new Notice("Checking Quick Reminder releases...");
+    try {
+      const result = await this.updater.installLatest();
+      if (!result.hasUpdate) {
+        new Notice(`Quick Reminder is already current (${result.currentVersion}).`);
+        return;
+      }
+
+      new Notice(
+        `Quick Reminder ${result.latestVersion} installed. Reload the plugin to finish.`,
+        10_000,
+      );
+    } catch (error) {
+      console.error("Quick Reminder update failed", error);
+      new Notice(`Quick Reminder update failed: ${getErrorMessage(error)}`, 10_000);
+    }
+  }
+
+  private async notifyIfUpdateAvailable(): Promise<void> {
+    if (!this.store.settings.checkForUpdatesOnLaunch) return;
+    try {
+      const result = await this.updater.check();
+      if (!result.hasUpdate) return;
+      new Notice(
+        `Quick Reminder ${result.latestVersion} is available. Run "Quick Reminder: Update from latest GitHub release".`,
+        12_000,
+      );
+    } catch (error) {
+      console.warn("Quick Reminder update check failed", error);
     }
   }
 
@@ -167,6 +204,10 @@ export default class QuickReminderPlugin extends Plugin {
       `Reminder: ${reminder.text} — ${new Date(reminder.dueAt).toLocaleString()}`,
     );
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 class QuickReminderSettingTab extends PluginSettingTab {
@@ -231,6 +272,26 @@ class QuickReminderSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.store.settings.soundOnNotify).onChange(async (v) => {
           await this.plugin.store.updateSettings({ soundOnNotify: v });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Check for updates on launch")
+      .setDesc("Show a notice when a newer GitHub release is available.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.store.settings.checkForUpdatesOnLaunch).onChange(async (v) => {
+          await this.plugin.store.updateSettings({ checkForUpdatesOnLaunch: v });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Plugin updates")
+      .setDesc(
+        `Install the latest release from ${this.plugin.updater.getRepositoryUrl()}. Reload the plugin after updating.`,
+      )
+      .addButton((button) =>
+        button.setButtonText("Install latest").onClick(async () => {
+          await this.plugin.installLatestRelease();
         }),
       );
   }

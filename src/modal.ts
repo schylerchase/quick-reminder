@@ -7,6 +7,7 @@ import { Scheduler } from "./scheduler";
 export class QuickCaptureModal extends Modal {
   private inputEl!: HTMLInputElement;
   private previewEl!: HTMLDivElement;
+  private saveButtonEl!: HTMLButtonElement;
   private currentParse = parseReminder("");
 
   constructor(
@@ -22,10 +23,19 @@ export class QuickCaptureModal extends Modal {
     contentEl.empty();
     contentEl.addClass("qr-modal");
 
-    contentEl.createEl("h2", { text: "Quick Reminder" });
+    const header = contentEl.createDiv({ cls: "qr-modal-header" });
+    header.createEl("h2", { text: "New reminder" });
 
-    this.inputEl = contentEl.createEl("input", {
+    const field = contentEl.createDiv({ cls: "qr-field" });
+    field.createEl("label", {
+      text: "Reminder",
+      cls: "qr-field-label",
+      attr: { for: "qr-reminder-input" },
+    });
+
+    this.inputEl = field.createEl("input", {
       type: "text",
+      attr: { id: "qr-reminder-input" },
       placeholder: "e.g. call mom tomorrow at 3pm",
       cls: "qr-input",
     });
@@ -46,8 +56,18 @@ export class QuickCaptureModal extends Modal {
       }
     });
 
-    const hint = contentEl.createDiv({ cls: "qr-hint" });
-    hint.setText("Enter to save · Esc to cancel");
+    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
+      this.close();
+    };
+    this.saveButtonEl = actions.createEl("button", {
+      text: "Create reminder",
+      cls: "qr-primary-btn",
+    });
+    this.saveButtonEl.onclick = () => {
+      void this.save();
+    };
+    this.updateSaveState();
   }
 
   onClose(): void {
@@ -59,22 +79,47 @@ export class QuickCaptureModal extends Modal {
     const { text, dueAt, matchedText } = this.currentParse;
 
     if (!text && !dueAt) {
-      this.previewEl.createSpan({ text: "Type a reminder…", cls: "qr-preview-muted" });
+      this.previewEl.createDiv({
+        text: "Waiting for a reminder",
+        cls: "qr-preview-status qr-preview-muted",
+      });
+      this.updateSaveState();
       return;
     }
 
-    const taskRow = this.previewEl.createDiv({ cls: "qr-preview-row" });
-    taskRow.createSpan({ text: "Task: ", cls: "qr-preview-label" });
-    taskRow.createSpan({ text: text || "(empty)" });
+    const status = this.previewEl.createDiv({
+      text: dueAt ? "Ready to create" : "Add a date or time",
+      cls: `qr-preview-status ${dueAt ? "is-ready" : "needs-time"}`,
+    });
+    status.setAttr("aria-live", "polite");
 
-    const whenRow = this.previewEl.createDiv({ cls: "qr-preview-row" });
-    whenRow.createSpan({ text: "When: ", cls: "qr-preview-label" });
+    this.renderPreviewRow("Task", text || "(empty)");
+
     if (dueAt) {
-      const d = new Date(dueAt);
-      whenRow.createSpan({ text: d.toLocaleString() + `  (matched: "${matchedText}")` });
+      this.renderPreviewRow("Time", formatDateTime(dueAt));
+      if (matchedText) {
+        this.previewEl.createDiv({
+          text: `Detected "${matchedText}"`,
+          cls: "qr-preview-meta",
+        });
+      }
     } else {
-      whenRow.createSpan({ text: "⚠ no time detected — add a date/time phrase", cls: "qr-preview-warn" });
+      this.renderPreviewRow("Time", "No time detected", "qr-preview-warn");
     }
+
+    this.updateSaveState();
+  }
+
+  private renderPreviewRow(label: string, value: string, cls = ""): void {
+    const row = this.previewEl.createDiv({ cls: "qr-preview-row" });
+    row.createSpan({ text: label, cls: "qr-preview-label" });
+    row.createSpan({ text: value, cls });
+  }
+
+  private updateSaveState(): void {
+    if (!this.saveButtonEl) return;
+    const { text, dueAt } = this.currentParse;
+    this.saveButtonEl.disabled = !text || !dueAt || dueAt <= Date.now();
   }
 
   private async save(): Promise<void> {
@@ -105,7 +150,7 @@ export class QuickCaptureModal extends Modal {
     await this.store.add(reminder);
     this.scheduler.schedule(reminder);
 
-    new Notice(`Reminder set: ${text} — ${new Date(dueAt).toLocaleString()}`);
+    new Notice(`Reminder set: ${text} — ${formatDateTime(dueAt)}`);
     this.close();
   }
 }
@@ -124,7 +169,7 @@ export class ReminderListModal extends Modal {
     contentEl.empty();
     contentEl.addClass("qr-list-modal");
 
-    contentEl.createEl("h2", { text: "Pending Reminders" });
+    contentEl.createEl("h2", { text: "Pending reminders" });
 
     const pending = this.store.pending;
     if (pending.length === 0) {
@@ -144,7 +189,7 @@ export class ReminderListModal extends Modal {
       new Setting(row)
         .addButton((b) =>
           b
-            .setButtonText("Snooze 10m")
+            .setButtonText(`Snooze ${this.store.settings.defaultSnoozeMinutes}m`)
             .onClick(async () => {
               await this.store.snooze(r.id, this.store.settings.defaultSnoozeMinutes);
               this.scheduler.scheduleAll();
@@ -171,4 +216,14 @@ export class ReminderListModal extends Modal {
 
 function genId(): string {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatDateTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

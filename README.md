@@ -4,37 +4,52 @@ Natural-language task capture with native OS notifications for Obsidian. Built b
 
 ## What it does
 
-- **Global hotkey → tiny modal** → type `call mom tomorrow 3pm` → saved + scheduled.
+- **Global hotkey -> tiny modal** -> type `call mom tomorrow 3pm` -> saved + scheduled.
 - **Native OS notifications** via the Electron notification API (macOS, Windows, Linux).
-- **Chrono-node NLP parser** — handles `tomorrow`, `next tuesday at 10am`, `in 2 hours`, `friday morning`, etc.
-- **Markdown mirror** — keeps a `Reminders.md` file in your vault synced with pending + notified reminders.
-- **Launch-time catch-up** — fires any reminders that went overdue while Obsidian was closed.
-- **Snooze + delete** — via the "Show pending reminders" command.
+- **Chrono-node NLP parser** - handles `tomorrow`, `next tuesday at 10am`, `in 2 hours`, `friday morning`, etc.
+- **Markdown mirror** - keeps a `Reminders.md` file in your vault synced with pending + notified reminders.
+- **Launch-time catch-up** - fires any reminders that went overdue while Obsidian was closed.
+- **Reminder manager** - done, snooze, edit, restore, re-add, and delete from one sidebar.
 
-## Install (manual, for now)
+## Install
 
-1. Build:
-   ```bash
-   cd quick-reminder
-   npm install
-   npm run build
-   ```
-2. Copy the plugin folder into your vault:
-   ```bash
-   mkdir -p /path/to/your/vault/.obsidian/plugins/quick-reminder
-   cp main.js manifest.json styles.css /path/to/your/vault/.obsidian/plugins/quick-reminder/
-   ```
-3. In Obsidian → Settings → Community plugins → enable **Quick Reminder**.
-4. Settings → Hotkeys → search "Quick Reminder" → bind **Quick capture reminder** to whatever you want (e.g. `Cmd+Shift+R`).
-5. First time firing a reminder, macOS/Windows will ask for notification permission. Grant it.
+### For friends
+
+1. Download `quick-reminder.zip` from the latest GitHub release.
+2. Unzip it.
+3. Run the installer:
+   - macOS: double-click `install-macos.command`.
+   - Windows: right-click `install-windows.ps1` and choose **Run with PowerShell**.
+4. Select your Obsidian vault folder.
+5. In Obsidian, go to **Settings -> Community plugins** and enable **Quick Reminder**.
+
+### Manual install
+
+Copy these release assets into your vault:
+
+```bash
+mkdir -p /path/to/your/vault/.obsidian/plugins/quick-reminder
+cp main.js manifest.json styles.css /path/to/your/vault/.obsidian/plugins/quick-reminder/
+```
+
+### Updates
+
+Quick Reminder checks GitHub releases on launch and shows a notice when a newer release exists.
+
+To update manually inside Obsidian:
+
+1. Open the command palette.
+2. Run **Quick Reminder: Update from latest GitHub release**.
+3. Reload the plugin after the update completes.
 
 ## Usage
 
 | Action | Command |
 |---|---|
-| Open capture modal | Hotkey you bound, or click the ribbon alarm icon |
-| View/snooze/delete pending | Command palette → "Show pending reminders" |
-| Change snooze default, mirror file, etc. | Settings → Quick Reminder |
+| Open reminder manager | Click the ribbon checklist icon, or command palette -> "Open reminder manager" |
+| Open capture modal | Command palette -> "Quick capture reminder", or the manager's New button |
+| View/snooze/edit/done reminders | Reminder manager |
+| Change snooze default, mirror file, etc. | Settings -> Quick Reminder |
 
 ### Example inputs
 
@@ -44,11 +59,11 @@ Natural-language task capture with native OS notifications for Obsidian. Built b
 - `meeting friday morning`
 - `pick up groceries saturday 9am`
 
-If no time phrase is detected, the modal warns you — add something like "in 30 minutes" or "tomorrow 9am".
+If no time phrase is detected, the modal warns you. Add something like `in 30 minutes` or `tomorrow 9am`.
 
 ## Architecture
 
-```
+```text
 src/
   main.ts        # Plugin entry, commands, settings tab
   modal.ts       # Quick-capture UI + pending list UI
@@ -56,19 +71,41 @@ src/
   scheduler.ts   # setTimeout queue + native notification firing
   store.ts       # Plugin data persistence + Reminders.md mirror
   types.ts       # Shared types + defaults
+  updater.ts     # GitHub release update installer
 ```
 
-## Known limits (MVP)
+## Release process
 
-- **Desktop only.** Mobile push needs a cloud relay (not built).
-- **Requires Obsidian running** for in-session reminders. If Obsidian is closed, reminders fire on next launch (configurable).
+1. Update `version` in `manifest.json` and `package.json`.
+2. Build release assets:
+   ```bash
+   npm run release:package
+   ```
+3. Push a tag:
+   ```bash
+   git tag v0.1.1
+   git push origin v0.1.1
+   ```
+4. GitHub Actions publishes a release containing:
+   - `main.js`
+   - `manifest.json`
+   - `styles.css`
+   - `quick-reminder.zip`
+   - macOS and Windows installer scripts
+
+The in-plugin updater downloads `main.js`, `manifest.json`, and `styles.css` from the latest GitHub release.
+
+## Known limits
+
+- **Desktop only.** Mobile push needs a cloud relay.
+- **Requires Obsidian running** for in-session reminders. If Obsidian is closed, reminders fire on next launch.
 - **No recurring reminders yet.** One-shot only.
-- **No notification actions** (snooze/done from notification itself) — click opens Obsidian; manage via the pending list.
+- **No notification actions** (snooze/done from notification itself). Click opens Obsidian; manage via the reminder manager.
 
 ## Roadmap ideas
 
 - Recurring reminders (`every monday 9am`)
 - Pre-reminder lead time (notify 15 min before)
-- Outlook email → reminder bridge
+- Outlook email -> reminder bridge
 - Mobile push via a self-hostable relay
 - Daily agenda auto-insert into daily note

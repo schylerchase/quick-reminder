@@ -62,6 +62,34 @@ export class ReminderStore {
     const r = this.data.reminders.find((x) => x.id === id);
     if (!r) return;
     r.notified = true;
+    r.completedAt = Date.now();
+    await this.persist();
+  }
+
+  async complete(id: string): Promise<void> {
+    const r = this.data.reminders.find((x) => x.id === id);
+    if (!r) return;
+    r.notified = true;
+    r.completedAt = Date.now();
+    await this.persist();
+  }
+
+  async restore(id: string): Promise<void> {
+    const r = this.data.reminders.find((x) => x.id === id);
+    if (!r) return;
+    r.notified = false;
+    delete r.completedAt;
+    await this.persist();
+  }
+
+  async updateReminder(id: string, text: string, dueAt: number): Promise<void> {
+    const r = this.data.reminders.find((x) => x.id === id);
+    if (!r) return;
+    r.text = text;
+    r.rawInput = `${text} ${new Date(dueAt).toLocaleString()}`;
+    r.dueAt = dueAt;
+    r.notified = false;
+    delete r.completedAt;
     await this.persist();
   }
 
@@ -71,6 +99,7 @@ export class ReminderStore {
     r.snoozedFrom = r.dueAt;
     r.dueAt = Date.now() + minutes * 60_000;
     r.notified = false;
+    delete r.completedAt;
     await this.persist();
   }
 
