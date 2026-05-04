@@ -16,6 +16,7 @@ export class QuickCaptureModal extends Modal {
     private scheduler: Scheduler,
     private initialInput = "",
     private sourceTaskId: string | null = null,
+    private onSaveReminder: ((reminder: Reminder, rawInput: string) => void | Promise<void>) | null = null,
   ) {
     super(app);
   }
@@ -163,8 +164,9 @@ export class QuickCaptureModal extends Modal {
 
     await this.store.add(reminder);
     this.scheduler.schedule(reminder);
+    await this.onSaveReminder?.(reminder, this.inputEl.value);
 
-    new Notice(`Reminder set: ${text} — ${formatDateTime(dueAt)}`);
+    new Notice(`Reminder set: ${text} - ${formatDateTime(dueAt)}`);
     this.close();
   }
 }

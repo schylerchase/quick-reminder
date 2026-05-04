@@ -8,6 +8,14 @@ import { TaskScanner } from "./taskScanner";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
 type TaskScope = "active" | "folder" | "vault";
+type ReminderViewState = {
+  taskScope: TaskScope;
+  selectedFolderPath: string | null;
+  lastMarkdownPath: string | null;
+  lastFolderPath: string | null;
+  sourceFilter: "all" | "checkbox" | "marker";
+  taskSearch: string;
+};
 
 export class ReminderView extends ItemView {
   private refreshHandler = () => {
@@ -396,7 +404,7 @@ export class ReminderView extends ItemView {
       badges.createSpan({ text: "Ignored", cls: "qr-task-badge qr-task-muted-badge" });
     }
     body.createDiv({ text: task.text, cls: "qr-view-row-text" });
-    const source = task.kind === "marker" && task.marker ? `${task.marker} · ` : "";
+    const source = task.kind === "marker" && task.marker ? `${task.marker} - ` : "";
     body.createDiv({
       text: `${source}${task.filePath}:${task.line}`,
       cls: "qr-view-row-when",
@@ -568,6 +576,15 @@ export class ReminderView extends ItemView {
   showFolder(folderPath: string): void {
     this.taskScope = "folder";
     this.selectedFolderPath = folderPath;
+    this.lastFolderPath = folderPath;
+    void this.render(true);
+  }
+
+  showActiveFile(filePath: string, folderPath: string): void {
+    this.taskScope = "active";
+    this.selectedFolderPath = null;
+    this.lastMarkdownPath = filePath;
+    this.lastFolderPath = folderPath;
     void this.render(true);
   }
 
@@ -614,33 +631,23 @@ export class ReminderView extends ItemView {
   }
 
   private async openAsMainTab(): Promise<void> {
-    const leaf = this.getExistingMainLeaf() ?? this.app.workspace.getLeaf("tab");
+    const leaf = this.getExistingMainLeaf() ?? this.getPreferredMainLeaf() ?? this.app.workspace.getLeaf("tab");
+    const currentFile = leaf.view instanceof MarkdownView ? leaf.view.file : null;
+    const state = this.getStateForMainOpen(currentFile);
     if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
       await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
     this.app.workspace.rightSplit.collapse();
     if (leaf.view instanceof ReminderView) {
-      leaf.view.taskScope = this.taskScope;
-      leaf.view.selectedFolderPath = this.selectedFolderPath;
-      leaf.view.lastMarkdownPath = this.lastMarkdownPath;
-      leaf.view.lastFolderPath = this.lastFolderPath;
-      leaf.view.sourceFilter = this.sourceFilter;
-      leaf.view.taskSearch = this.taskSearch;
+      leaf.view.applyViewState(state);
       void leaf.view.render(true);
     }
     this.closeMainManagerLeaves(leaf);
   }
 
   private async openAsSidebar(): Promise<void> {
-    const state = {
-      taskScope: this.taskScope,
-      selectedFolderPath: this.selectedFolderPath,
-      lastMarkdownPath: this.lastMarkdownPath,
-      lastFolderPath: this.lastFolderPath,
-      sourceFilter: this.sourceFilter,
-      taskSearch: this.taskSearch,
-    };
+    const state = this.getViewState();
 
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
       if (leaf.view.containerEl.closest(".mod-right-split")) {
@@ -656,21 +663,85 @@ export class ReminderView extends ItemView {
     this.app.workspace.rightSplit.expand();
     await this.app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof ReminderView) {
-      leaf.view.taskScope = state.taskScope;
-      leaf.view.selectedFolderPath = state.selectedFolderPath;
-      leaf.view.lastMarkdownPath = state.lastMarkdownPath;
-      leaf.view.lastFolderPath = state.lastFolderPath;
-      leaf.view.sourceFilter = state.sourceFilter;
-      leaf.view.taskSearch = state.taskSearch;
+      leaf.view.applyViewState(state);
       void leaf.view.render(true);
     }
     this.closeOtherManagerLeaves(leaf);
+  }
+
+  private getViewState(): ReminderViewState {
+    return {
+      taskScope: this.taskScope,
+      selectedFolderPath: this.selectedFolderPath,
+      lastMarkdownPath: this.lastMarkdownPath,
+      lastFolderPath: this.lastFolderPath,
+      sourceFilter: this.sourceFilter,
+      taskSearch: this.taskSearch,
+    };
+  }
+
+  private applyViewState(state: ReminderViewState): void {
+    this.taskScope = state.taskScope;
+    this.selectedFolderPath = state.selectedFolderPath;
+    this.lastMarkdownPath = state.lastMarkdownPath;
+    this.lastFolderPath = state.lastFolderPath;
+    this.sourceFilter = state.sourceFilter;
+    this.taskSearch = state.taskSearch;
+  }
+
+  private getStateForMainOpen(currentFile: MarkdownView["file"]): ReminderViewState {
+    const state = this.getViewState();
+    if (currentFile) {
+      return {
+        ...state,
+        taskScope: "active",
+        selectedFolderPath: null,
+        lastMarkdownPath: currentFile.path,
+        lastFolderPath: currentFile.parent?.path ?? "",
+      };
+    }
+    if (state.selectedFolderPath !== null) {
+      return {
+        ...state,
+        taskScope: "folder",
+      };
+    }
+    return state;
   }
 
   private getExistingMainLeaf(): WorkspaceLeaf | null {
     return this.app.workspace
       .getLeavesOfType(VIEW_TYPE_REMINDER)
       .find((leaf) => !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) ?? null;
+  }
+
+  private getPreferredMainLeaf(): WorkspaceLeaf | null {
+    const activeLeaf = this.getMainMarkdownLeaf(this.app.workspace.activeLeaf);
+    if (activeLeaf) {
+      return activeLeaf;
+    }
+    const recentLeaf = this.getMainMarkdownLeaf(this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit));
+    if (recentLeaf) {
+      return recentLeaf;
+    }
+    return this.getAnyMainLeaf();
+  }
+
+  private getMainMarkdownLeaf(leaf: WorkspaceLeaf | null): WorkspaceLeaf | null {
+    if (!leaf) return null;
+    if (leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) return null;
+    return leaf.view instanceof MarkdownView ? leaf : null;
+  }
+
+  private getAnyMainLeaf(): WorkspaceLeaf | null {
+    let result: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (result) return;
+      if (!leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) {
+        result = leaf;
+      }
+    });
+    return result;
   }
 
   private getExistingSidebarLeaf(): WorkspaceLeaf | null {
@@ -736,10 +807,10 @@ function getSummaryText(
 ): string {
   const taskLabel = getTaskScopeLabel(taskScope, activeFilePath, folderPath);
   if (overdueCount > 0) {
-    return `${overdueCount} overdue · ${upcomingCount} upcoming · ${scrapedCount} ${taskLabel}`;
+    return `${overdueCount} overdue - ${upcomingCount} upcoming - ${scrapedCount} ${taskLabel}`;
   }
   if (upcomingCount > 0) {
-    return `${upcomingCount} upcoming · ${scrapedCount} ${taskLabel}`;
+    return `${upcomingCount} upcoming - ${scrapedCount} ${taskLabel}`;
   }
   if (scrapedCount > 0) {
     return `${scrapedCount} ${taskLabel}`;
@@ -805,15 +876,15 @@ function formatWhen(ms: number): string {
   const days = Math.round(abs / 86_400_000);
 
   const exact = formatExact(ms);
-  if (diff < 0) return `overdue · ${exact}`;
-  if (mins < 60) return `in ${mins}m · ${exact}`;
-  if (hours < 24) return `in ${hours}h · ${exact}`;
-  return `in ${days}d · ${exact}`;
+  if (diff < 0) return `overdue - ${exact}`;
+  if (mins < 60) return `in ${mins}m - ${exact}`;
+  if (hours < 24) return `in ${hours}h - ${exact}`;
+  return `in ${days}d - ${exact}`;
 }
 
 function formatHistoryWhen(reminder: Reminder): string {
   const completedAt = reminder.completedAt ?? reminder.dueAt;
-  return `${formatAgo(completedAt)} done · due ${formatExact(reminder.dueAt)}`;
+  return `${formatAgo(completedAt)} done - due ${formatExact(reminder.dueAt)}`;
 }
 
 function formatAgo(ms: number): string {

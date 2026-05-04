@@ -68,7 +68,7 @@ export class Scheduler {
       showNativeNotification(reminder, this.store.settings.soundOnNotify);
     } catch (e) {
       console.error("native notify failed, falling back to Notice", e);
-      new Notice(`⏰ ${reminder.text}`, 10_000);
+      new Notice(`Reminder: ${reminder.text}`, 10_000);
     }
     this.onFire(reminder);
   }

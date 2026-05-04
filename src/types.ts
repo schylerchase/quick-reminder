@@ -38,6 +38,7 @@ export interface Settings {
   soundOnNotify: boolean;
   checkForUpdatesOnLaunch: boolean;
   autoRevealActiveFile: boolean;
+  tasksIntegrationEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -48,4 +49,5 @@ export const DEFAULT_SETTINGS: Settings = {
   soundOnNotify: true,
   checkForUpdatesOnLaunch: true,
   autoRevealActiveFile: true,
+  tasksIntegrationEnabled: true,
 };

@@ -6,6 +6,7 @@ import {
   Editor,
   MarkdownView,
   Notice,
+  TFile,
   TFolder,
   WorkspaceLeaf,
 } from "obsidian";
@@ -80,7 +81,7 @@ export default class QuickReminderPlugin extends Plugin {
       id: "open-view-main-tab",
       name: "Open reminder manager as main tab",
       callback: () => {
-        void this.activateView(true, "tab");
+        void this.openMainManagerForCurrentContext();
       },
     });
 
@@ -111,11 +112,30 @@ export default class QuickReminderPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         const sel = editor.getSelection().trim();
+        if (this.isTasksIntegrationAvailable()) {
+          menu.addItem((item) => {
+            item
+              .setTitle("Add task reminder")
+              .setIcon("list-plus")
+              .onClick(() => {
+                void this.addTaskReminderFromEditor(editor, view as MarkdownView);
+              });
+          });
+        } else {
+          menu.addItem((item) => {
+            item
+              .setTitle("Add reminder")
+              .setIcon("calendar-plus")
+              .onClick(() => {
+                new QuickCaptureModal(this.app, this.store, this.scheduler, this.getEditorTaskSeed(editor)).open();
+              });
+          });
+        }
         if (!sel) return;
         menu.addItem((item) => {
           item
             .setTitle("Create reminder from selection")
-            .setIcon("alarm-clock")
+            .setIcon("calendar-plus")
             .onClick(() => {
               void this.convertSelectionToReminder(editor, view as MarkdownView);
             });
@@ -136,10 +156,15 @@ export default class QuickReminderPlugin extends Plugin {
     });
 
     this.registerEvent(
-      this.app.workspace.on("file-open", () => {
+      this.app.workspace.on("file-open", (file) => {
         this.clearSelectedTaskFolderHighlight();
         if (this.store.settings.autoRevealActiveFile) {
           void this.revealActiveFileInExplorer(false);
+        }
+        if (file instanceof TFile && file.extension === "md") {
+          window.setTimeout(() => {
+            void this.moveMainDashboardAsideForFile(file);
+          }, 0);
         }
       }),
     );
@@ -187,7 +212,7 @@ export default class QuickReminderPlugin extends Plugin {
     let leaf: WorkspaceLeaf | null;
 
     if (placement === "tab") {
-      leaf = existing[0] ?? workspace.getLeaf("tab");
+      leaf = existing[0] ?? getPreferredMainLeaf(workspace) ?? workspace.getLeaf("tab");
       if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
         await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: reveal });
       }
@@ -229,6 +254,58 @@ export default class QuickReminderPlugin extends Plugin {
       return "tab";
     }
     return "sidebar";
+  }
+
+  private async moveMainDashboardAsideForFile(file: TFile): Promise<void> {
+    const mainManagerLeaf = this.app.workspace
+      .getLeavesOfType(VIEW_TYPE_REMINDER)
+      .find((leaf) => isMainWorkspaceLeaf(leaf));
+    if (!mainManagerLeaf) return;
+
+    const activeLeaf = this.app.workspace.activeLeaf;
+    if (activeLeaf && activeLeaf !== mainManagerLeaf && isMainWorkspaceLeaf(activeLeaf)) {
+      await this.activateView(true, "sidebar");
+      mainManagerLeaf.detach();
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      this.closeDuplicateMainFileLeaves(file, activeLeaf, [0, 100, 300]);
+      return;
+    }
+
+    await this.activateView(true, "sidebar");
+    await mainManagerLeaf.openFile(file, { active: true });
+    this.app.workspace.setActiveLeaf(mainManagerLeaf, { focus: true });
+    this.closeDuplicateMainFileLeaves(file, mainManagerLeaf, [0, 100, 300]);
+  }
+
+  private closeDuplicateMainFileLeaves(file: TFile, keepLeaf: WorkspaceLeaf, delays = [0]): void {
+    for (const delay of delays) {
+      window.setTimeout(() => {
+        this.closeDuplicateMainFileLeavesNow(file, keepLeaf);
+      }, delay);
+    }
+  }
+
+  private closeDuplicateMainFileLeavesNow(file: TFile, keepLeaf: WorkspaceLeaf): void {
+    const duplicates: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf === keepLeaf) return;
+      if (!isMainWorkspaceLeaf(leaf)) return;
+      if (!(leaf.view instanceof MarkdownView)) return;
+      if (leaf.view.file?.path !== file.path) return;
+      duplicates.push(leaf);
+    });
+
+    for (const leaf of duplicates) {
+      leaf.detach();
+    }
+  }
+
+  private async openMainManagerForCurrentContext(): Promise<void> {
+    const file = this.app.workspace.getActiveFile();
+    const view = await this.activateView(true, "tab");
+    if (file instanceof TFile && file.extension === "md") {
+      view?.showActiveFile(file.path, file.parent?.path ?? "");
+    }
   }
 
   private handleFileExplorerFolderClick(event: MouseEvent): void {
@@ -346,12 +423,95 @@ export default class QuickReminderPlugin extends Plugin {
     await this.store.add(reminder);
     this.scheduler.schedule(reminder);
 
-    const decorated = `⏰ ${selection}`;
-    editor.replaceSelection(decorated);
+    editor.replaceSelection(toReminderMarkdown(selection, reminder.dueAt));
 
     new Notice(
-      `Reminder: ${reminder.text} — ${new Date(reminder.dueAt).toLocaleString()}`,
+      `Reminder: ${reminder.text} - ${new Date(reminder.dueAt).toLocaleString()}`,
     );
+  }
+
+  private async addTaskReminderFromEditor(editor: Editor, view: MarkdownView): Promise<void> {
+    const initialText = this.getEditorTaskSeed(editor);
+    const api = this.getEnabledTasksPluginApi();
+    if (api) {
+      const initialLine = toTaskLine(initialText);
+      const nextLine = await api.editTaskLineModal(initialLine);
+      if (!nextLine) return;
+      const markdownLine = sanitizeTaskPluginLine(nextLine);
+      this.insertTaskLine(editor, markdownLine);
+      await this.addReminderFromTaskLine(markdownLine, view.file?.path ?? null, editor.getCursor().line + 1);
+      return;
+    }
+
+    new QuickCaptureModal(this.app, this.store, this.scheduler, initialText, null, async (reminder, rawInput) => {
+      const line = toTaskLine(toReminderMarkdown(rawInput, reminder.dueAt));
+      this.insertTaskLine(editor, line);
+      await this.activateView(false);
+    }).open();
+  }
+
+  isTasksIntegrationAvailable(): boolean {
+    return this.store.settings.tasksIntegrationEnabled && this.getEnabledTasksPluginApi() !== null;
+  }
+
+  getTasksPluginStatus(): "available" | "disabled" | "missing" {
+    const plugin = getTasksPluginRecord(this.app);
+    if (!plugin) return "missing";
+    return getTasksPluginApi(this.app) ? "available" : "disabled";
+  }
+
+  private getEnabledTasksPluginApi(): TasksPluginApi | null {
+    if (!this.store.settings.tasksIntegrationEnabled) return null;
+    return getTasksPluginApi(this.app);
+  }
+
+  private getEditorTaskSeed(editor: Editor): string {
+    const selection = editor.getSelection().trim();
+    if (selection) return cleanMarkdownTaskLine(selection);
+
+    const cursor = editor.getCursor();
+    return cleanMarkdownTaskLine(editor.getLine(cursor.line).trim());
+  }
+
+  private insertTaskLine(editor: Editor, line: string): void {
+    const selection = editor.getSelection();
+    if (selection.trim()) {
+      editor.replaceSelection(line);
+      return;
+    }
+
+    const cursor = editor.getCursor();
+    const currentLine = editor.getLine(cursor.line);
+    if (isMarkdownTaskLine(currentLine) || currentLine.trim() === "") {
+      editor.replaceRange(line, { line: cursor.line, ch: 0 }, { line: cursor.line, ch: currentLine.length });
+      return;
+    }
+
+    editor.replaceRange(`\n${line}`, { line: cursor.line, ch: currentLine.length });
+  }
+
+  private async addReminderFromTaskLine(line: string, filePath: string | null, lineNumber: number): Promise<void> {
+    const parsed = parseReminder(cleanMarkdownTaskLine(line));
+    if (!parsed.dueAt || parsed.dueAt <= Date.now()) {
+      new Notice("Task added. Add a date or time to show it as a reminder.");
+      return;
+    }
+
+    const reminder: Reminder = {
+      id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      text: parsed.text,
+      rawInput: line,
+      dueAt: parsed.dueAt,
+      createdAt: Date.now(),
+      notified: false,
+    };
+    if (filePath) {
+      reminder.sourceTaskId = `${filePath}:${lineNumber}:checkbox:${parsed.text}`;
+    }
+
+    await this.store.add(reminder);
+    this.scheduler.schedule(reminder);
+    new Notice(`Task reminder added: ${reminder.text}`);
   }
 
   private getActiveMarkdownTaskText(): string {
@@ -392,6 +552,28 @@ function isRightSidebarLeaf(leaf: WorkspaceLeaf): boolean {
   return leaf.view.containerEl.closest(".mod-right-split") !== null;
 }
 
+function getPreferredMainLeaf(workspace: App["workspace"]): WorkspaceLeaf | null {
+  const activeLeaf = getMainWorkspaceLeaf(workspace.activeLeaf);
+  if (activeLeaf) return activeLeaf;
+
+  const recentLeaf = getMainWorkspaceLeaf(workspace.getMostRecentLeaf(workspace.rootSplit));
+  if (recentLeaf) return recentLeaf;
+
+  let result: WorkspaceLeaf | null = null;
+  workspace.iterateAllLeaves((leaf) => {
+    if (result) return;
+    if (isMainWorkspaceLeaf(leaf)) {
+      result = leaf;
+    }
+  });
+  return result;
+}
+
+function getMainWorkspaceLeaf(leaf: WorkspaceLeaf | null): WorkspaceLeaf | null {
+  if (!leaf) return null;
+  return isMainWorkspaceLeaf(leaf) ? leaf : null;
+}
+
 async function openReminderSidebarLeaf(
   workspace: App["workspace"],
   reveal: boolean,
@@ -403,6 +585,22 @@ async function openReminderSidebarLeaf(
   await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: reveal });
   await leaf.loadIfDeferred();
   return leaf;
+}
+
+interface TasksPluginApi {
+  editTaskLineModal(line: string): Promise<string>;
+}
+
+function getTasksPluginApi(app: unknown): TasksPluginApi | null {
+  const tasksPlugin = getTasksPluginRecord(app);
+  const api = tasksPlugin?.apiV1 as Partial<TasksPluginApi> | undefined;
+  return typeof api?.editTaskLineModal === "function" ? (api as TasksPluginApi) : null;
+}
+
+function getTasksPluginRecord(app: unknown): { apiV1?: unknown } | null {
+  return ((app as {
+    plugins?: { plugins?: Record<string, unknown> };
+  }).plugins?.plugins?.["obsidian-tasks-plugin"] as { apiV1?: unknown } | undefined) ?? null;
 }
 
 type FileExplorerApi = {
@@ -452,8 +650,71 @@ function getErrorMessage(error: unknown): string {
 function cleanMarkdownTaskLine(value: string): string {
   return value
     .replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX-]\]\s+/, "")
-    .replace(/^⏰\s+/, "")
+    .replace(/\[due::\s*([^\]]+)\]/gi, "due $1")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+function isMarkdownTaskLine(value: string): boolean {
+  return /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX-]\]\s+/.test(value);
+}
+
+function toTaskLine(value: string): string {
+  const trimmed = value.trim();
+  if (isMarkdownTaskLine(trimmed)) {
+    return trimmed;
+  }
+  return `- [ ] ${trimmed}`;
+}
+
+function toReminderMarkdown(value: string, dueAt: number): string {
+  const parsed = parseReminder(value);
+  const text = parsed.text || value.trim();
+  return `${text} [due:: ${formatMarkdownDateTime(dueAt)}]`;
+}
+
+function sanitizeTaskPluginLine(value: string): string {
+  return value
+    .replace(/\u{1F4C5}\s*(\d{4}-\d{2}-\d{2})/gu, "[due:: $1]")
+    .replace(/\u{23F3}\s*(\d{4}-\d{2}-\d{2})/gu, "[scheduled:: $1]")
+    .replace(/\u{1F6EB}\s*(\d{4}-\d{2}-\d{2})/gu, "[start:: $1]")
+    .replace(/\u{2705}\s*(\d{4}-\d{2}-\d{2})/gu, "[done:: $1]")
+    .replace(/\u{2795}\s*(\d{4}-\d{2}-\d{2})/gu, "[created:: $1]")
+    .trim();
+}
+
+function formatMarkdownDateTime(ms: number): string {
+  const date = new Date(ms);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  if (hh === "00" && min === "00") {
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function getTasksIntegrationDescription(status: "available" | "disabled" | "missing"): string {
+  if (status === "available") {
+    return "Tasks is installed and available. When enabled, editor right-click uses the Tasks modal for task reminders.";
+  }
+  if (status === "disabled") {
+    return "Tasks appears to be installed but its API is not available. Enable or reload the Tasks plugin to use this integration.";
+  }
+  return "Tasks is not installed. Quick Reminder will use its own reminder capture unless Tasks is installed and this integration is enabled.";
+}
+
+function openCommunityPlugins(app: App): void {
+  const settings = (app as {
+    setting?: {
+      open?: () => void;
+      openTabById?: (id: string) => void;
+    };
+  }).setting;
+  settings?.open?.();
+  settings?.openTabById?.("community-plugins");
 }
 
 class QuickReminderSettingTab extends PluginSettingTab {
@@ -540,6 +801,24 @@ class QuickReminderSettingTab extends PluginSettingTab {
             await this.plugin.revealActiveFileInExplorer(true);
           }
         }),
+      );
+
+    const tasksStatus = this.plugin.getTasksPluginStatus();
+    new Setting(containerEl)
+      .setName("Tasks plugin integration")
+      .setDesc(getTasksIntegrationDescription(tasksStatus))
+      .addToggle((t) =>
+        t.setValue(this.plugin.store.settings.tasksIntegrationEnabled).onChange(async (v) => {
+          await this.plugin.store.updateSettings({ tasksIntegrationEnabled: v });
+          this.display();
+        }),
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Open community plugins")
+          .onClick(() => {
+            openCommunityPlugins(this.app);
+          }),
       );
 
     new Setting(containerEl)

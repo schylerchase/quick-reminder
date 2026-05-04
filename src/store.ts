@@ -246,7 +246,7 @@ export class ReminderStore {
       lines.push("_None._", "");
     } else {
       for (const r of pending) {
-        lines.push(`- [ ] ${r.text} — **${formatDate(r.dueAt)}**`);
+        lines.push(`- [ ] ${r.text} - **${formatDate(r.dueAt)}**`);
       }
       lines.push("");
     }
@@ -256,7 +256,7 @@ export class ReminderStore {
       lines.push("_None._", "");
     } else {
       for (const r of done.slice(-20).reverse()) {
-        lines.push(`- [x] ${r.text} — ${formatDate(r.dueAt)}`);
+        lines.push(`- [x] ${r.text} - ${formatDate(r.dueAt)}`);
       }
     }
 
