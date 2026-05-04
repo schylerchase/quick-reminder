@@ -1,19 +1,34 @@
-import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
-import { Reminder } from "./types";
+import { EventRef, ItemView, MarkdownView, Notice, WorkspaceLeaf } from "obsidian";
+import { Reminder, ScrapedTask } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
 import { QuickCaptureModal } from "./modal";
+import { parseReminder } from "./parser";
+import { TaskScanner } from "./taskScanner";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
+type TaskScope = "active" | "folder" | "vault";
 
 export class ReminderView extends ItemView {
-  private refreshHandler = () => this.render();
+  private refreshHandler = () => {
+    void this.render();
+  };
   private editingId: string | null = null;
+  private scrapedTasks: ScrapedTask[] = [];
+  private isScanningTasks = false;
+  private taskSearch = "";
+  private taskScope: TaskScope = "folder";
+  private selectedFolderPath: string | null = null;
+  private lastMarkdownPath: string | null = null;
+  private lastFolderPath: string | null = null;
+  private sourceFilter: "all" | "checkbox" | "marker" = "all";
+  private fileOpenRef: EventRef | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     private store: ReminderStore,
     private scheduler: Scheduler,
+    private taskScanner: TaskScanner,
   ) {
     super(leaf);
   }
@@ -32,17 +47,33 @@ export class ReminderView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.store.onChange(this.refreshHandler);
-    this.render();
+    this.captureActiveMarkdownContext();
+    this.fileOpenRef = this.app.workspace.on("file-open", () => {
+      this.captureActiveMarkdownContext();
+      if (this.taskScope === "active" || (this.taskScope === "folder" && !this.selectedFolderPath)) {
+        void this.render();
+      }
+    });
+    await this.render(true);
   }
 
   async onClose(): Promise<void> {
     this.store.offChange(this.refreshHandler);
+    if (this.fileOpenRef) {
+      this.app.workspace.offref(this.fileOpenRef);
+      this.fileOpenRef = null;
+    }
   }
 
-  private render(): void {
+  private async render(scanVaultTasks = false): Promise<void> {
+    if (scanVaultTasks && !this.isScanningTasks) {
+      await this.refreshScrapedTasks();
+    }
+
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("qr-view");
+    container.toggleClass("qr-view-dashboard", this.isMainWorkspaceView());
 
     const pending = this.store.pending;
     const now = Date.now();
@@ -50,39 +81,94 @@ export class ReminderView extends ItemView {
     const upcoming = pending.filter((r) => r.dueAt > now);
     const allDone = this.store.all.filter((r) => r.notified);
     const done = allDone.slice(-30).reverse();
+    this.captureActiveMarkdownContext();
+    const activeFilePath = this.lastMarkdownPath;
+    const folderPath = this.getScopedFolderPath();
+    const scraped = this.getScopedScrapedTasks(activeFilePath, folderPath);
+    const ignoredTaskIds = this.store.ignoredTaskIds;
+    const unignoredScraped = scraped.filter((task) => !ignoredTaskIds.has(task.id));
+    const filteredScraped = this.getFilteredScrapedTasks(unignoredScraped);
+    const activeScraped = filteredScraped.filter((task) => !task.completed);
+    const completedScraped = filteredScraped.filter((task) => task.completed);
+    const scopedIgnoredScraped = scraped.filter((task) => ignoredTaskIds.has(task.id));
+    const ignoredScraped = this.getFilteredScrapedTasks(scopedIgnoredScraped);
 
     const header = container.createDiv({ cls: "qr-view-header" });
     const title = header.createDiv({ cls: "qr-view-title" });
-    title.createEl("h3", { text: "Reminders" });
+      title.createEl("h3", { text: "Task Manager" });
     title.createDiv({
-      text: getSummaryText(overdue.length, upcoming.length),
+      text: getSummaryText(overdue.length, upcoming.length, activeScraped.length, this.taskScope, activeFilePath, folderPath),
       cls: "qr-view-summary",
     });
 
-    const addBtn = header.createEl("button", { text: "New", cls: "qr-view-add-btn" });
+    const headerActions = header.createDiv({ cls: "qr-view-header-actions" });
+    const scanBtn = headerActions.createEl("button", { text: "Scan", cls: "qr-view-secondary-btn" });
+    scanBtn.onclick = async () => {
+      await this.refreshScrapedTasks();
+      await this.render();
+      new Notice(`Found ${this.scrapedTasks.length} vault tasks`);
+    };
+
+    if (this.isMainWorkspaceView()) {
+      const sidebarBtn = headerActions.createEl("button", { text: "Sidebar", cls: "qr-view-secondary-btn" });
+      sidebarBtn.onclick = async () => {
+        await this.openAsSidebar();
+      };
+    } else {
+      const fullBtn = headerActions.createEl("button", { text: "Full", cls: "qr-view-secondary-btn" });
+      fullBtn.onclick = async () => {
+        await this.openAsMainTab();
+      };
+    }
+
+    const addBtn = headerActions.createEl("button", { text: "New", cls: "qr-view-add-btn" });
     addBtn.onclick = () => {
       new QuickCaptureModal(this.app, this.store, this.scheduler).open();
     };
 
-    this.renderStats(container as HTMLElement, overdue.length, upcoming.length, allDone.length);
+    this.renderStats(
+      container as HTMLElement,
+      overdue.length,
+      upcoming.length,
+      activeScraped.length,
+      ignoredScraped.length,
+    );
+    this.renderTaskToolbar(container as HTMLElement, unignoredScraped, filteredScraped.length);
 
     if (overdue.length > 0) {
       this.renderSection(container as HTMLElement, "Overdue", overdue, false);
     }
     this.renderSection(container as HTMLElement, "Upcoming", upcoming, false);
+    this.renderScrapedSection(container as HTMLElement, "Vault tasks", activeScraped, unignoredScraped.filter((task) => !task.completed).length);
+    this.renderScrapedSection(container as HTMLElement, "Completed vault tasks", completedScraped, unignoredScraped.filter((task) => task.completed).length);
+    this.renderScrapedSection(container as HTMLElement, "Ignored", ignoredScraped, scopedIgnoredScraped.length, true);
     this.renderSection(container as HTMLElement, "History", done, true);
+  }
+
+  private async refreshScrapedTasks(): Promise<void> {
+    this.isScanningTasks = true;
+    try {
+      this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
+    } catch (error) {
+      console.error("Quick Reminder task scan failed", error);
+      new Notice("Quick Reminder could not scan vault tasks.");
+    } finally {
+      this.isScanningTasks = false;
+    }
   }
 
   private renderStats(
     parent: HTMLElement,
     overdueCount: number,
     upcomingCount: number,
-    historyCount: number,
+    scrapedCount: number,
+    ignoredCount: number,
   ): void {
     const stats = parent.createDiv({ cls: "qr-view-stats" });
     this.renderStat(stats, "Overdue", overdueCount, overdueCount > 0);
     this.renderStat(stats, "Upcoming", upcomingCount);
-    this.renderStat(stats, "Done", historyCount);
+    this.renderStat(stats, "Visible tasks", scrapedCount);
+    this.renderStat(stats, "Ignored", ignoredCount);
   }
 
   private renderStat(parent: HTMLElement, label: string, count: number, warn = false): void {
@@ -134,66 +220,57 @@ export class ReminderView extends ItemView {
     body.createDiv({ text: whenLabel, cls: "qr-view-row-when" });
 
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
+    const renderActions = isHistory ? this.renderHistoryReminderActions : this.renderPendingReminderActions;
+    renderActions.call(this, actions, r);
+    this.renderDeleteReminderAction(actions, r);
+  }
 
-    if (!isHistory) {
-      const doneBtn = actions.createEl("button", { text: "Done", cls: "qr-row-btn qr-done-btn" });
-      doneBtn.onclick = async () => {
-        this.scheduler.cancel(r.id);
-        await this.store.complete(r.id);
-        new Notice("Marked done");
-      };
+  private renderPendingReminderActions(actions: HTMLElement, reminder: Reminder): void {
+    actions.createEl("button", { text: "Done", cls: "qr-row-btn qr-done-btn" }).onclick = async () => {
+      this.scheduler.cancel(reminder.id);
+      await this.store.complete(reminder.id);
+      new Notice("Marked done");
+    };
 
-      const snoozeMinutes = this.store.settings.defaultSnoozeMinutes;
-      const snoozeBtn = actions.createEl("button", {
-        text: `Snooze ${snoozeMinutes}m`,
-        cls: "qr-row-btn",
-      });
-      snoozeBtn.setAttr("aria-label", `Snooze ${snoozeMinutes} minutes`);
-      snoozeBtn.onclick = async () => {
-        await this.store.snooze(r.id, snoozeMinutes);
-        this.scheduler.scheduleAll();
-        new Notice(`Snoozed ${snoozeMinutes}m`);
-      };
+    const snoozeMinutes = this.store.settings.defaultSnoozeMinutes;
+    const snoozeBtn = actions.createEl("button", {
+      text: `Snooze ${snoozeMinutes}m`,
+      cls: "qr-row-btn",
+    });
+    snoozeBtn.setAttr("aria-label", `Snooze ${snoozeMinutes} minutes`);
+    snoozeBtn.onclick = async () => {
+      await this.store.snooze(reminder.id, snoozeMinutes);
+      this.scheduler.scheduleAll();
+      new Notice(`Snoozed ${snoozeMinutes}m`);
+    };
 
-      const editBtn = actions.createEl("button", { text: "Edit", cls: "qr-row-btn" });
-      editBtn.onclick = () => {
-        this.editingId = r.id;
-        this.render();
-      };
-    } else {
-      const restoreBtn = actions.createEl("button", { text: "Restore", cls: "qr-row-btn" });
-      restoreBtn.onclick = async () => {
-        await this.store.restore(r.id);
-        this.scheduler.scheduleAll();
-        new Notice("Reminder restored");
-      };
+    actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = () => {
+      this.editingId = reminder.id;
+      void this.render();
+    };
+  }
 
-      const reuseBtn = actions.createEl("button", { text: "Re-add", cls: "qr-row-btn" });
-      reuseBtn.onclick = () => {
-        const modal = new QuickCaptureModal(this.app, this.store, this.scheduler);
-        modal.open();
-        setTimeout(() => {
-          const inputEl = this.app.workspace.containerEl.querySelector(
-            ".qr-input",
-          ) as HTMLInputElement | null;
-          if (inputEl) {
-            inputEl.value = r.text;
-            inputEl.dispatchEvent(new Event("input"));
-            inputEl.focus();
-            inputEl.select();
-          }
-        }, 50);
-      };
-    }
+  private renderHistoryReminderActions(actions: HTMLElement, reminder: Reminder): void {
+    actions.createEl("button", { text: "Restore", cls: "qr-row-btn" }).onclick = async () => {
+      await this.store.restore(reminder.id);
+      this.scheduler.scheduleAll();
+      new Notice("Reminder restored");
+    };
 
+    actions.createEl("button", { text: "Re-add", cls: "qr-row-btn" }).onclick = () => {
+      this.openCaptureWithText(reminder.text);
+    };
+  }
+
+  private renderDeleteReminderAction(actions: HTMLElement, reminder: Reminder): void {
     const delBtn = actions.createEl("button", {
       text: "Delete",
       cls: "qr-row-btn qr-view-del",
     });
     delBtn.setAttr("aria-label", "Delete");
     delBtn.onclick = async () => {
-      this.scheduler.cancel(r.id);
-      await this.store.remove(r.id);
+      this.scheduler.cancel(reminder.id);
+      await this.store.remove(reminder.id);
     };
   }
 
@@ -209,7 +286,7 @@ export class ReminderView extends ItemView {
     const actions = editor.createDiv({ cls: "qr-edit-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-row-btn" }).onclick = () => {
       this.editingId = null;
-      this.render();
+      void this.render();
     };
 
     actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" }).onclick = async () => {
@@ -231,16 +308,486 @@ export class ReminderView extends ItemView {
 
     window.setTimeout(() => textInput.focus(), 0);
   }
+
+  private renderTaskToolbar(
+    parent: HTMLElement,
+    tasks: ScrapedTask[],
+    visibleCount: number,
+  ): void {
+    const toolbar = parent.createDiv({ cls: "qr-task-toolbar" });
+    const search = toolbar.createEl("input", {
+      type: "search",
+      cls: "qr-task-search",
+      placeholder: "Filter tasks or files",
+    });
+    search.value = this.taskSearch;
+    search.oninput = () => {
+      this.taskSearch = search.value;
+      void this.render();
+    };
+
+    const scopeSelect = toolbar.createEl("select", { cls: "qr-task-select" });
+    scopeSelect.createEl("option", { text: "Current file", value: "active" });
+    scopeSelect.createEl("option", { text: "Current folder", value: "folder" });
+    scopeSelect.createEl("option", { text: "Whole vault", value: "vault" });
+    scopeSelect.value = this.taskScope;
+    scopeSelect.onchange = () => {
+      this.taskScope = scopeSelect.value as TaskScope;
+      this.selectedFolderPath = null;
+      void this.render();
+    };
+
+    const sourceSelect = toolbar.createEl("select", { cls: "qr-task-select" });
+    sourceSelect.createEl("option", { text: "All sources", value: "all" });
+    sourceSelect.createEl("option", { text: "Checkboxes", value: "checkbox" });
+    sourceSelect.createEl("option", { text: "Markers", value: "marker" });
+    sourceSelect.value = this.sourceFilter;
+    sourceSelect.onchange = () => {
+      this.sourceFilter = sourceSelect.value as "all" | "checkbox" | "marker";
+      void this.render();
+    };
+
+    toolbar.createDiv({
+      text: `${visibleCount} of ${tasks.length}`,
+      cls: "qr-task-filter-count",
+    });
+  }
+
+  private renderScrapedSection(
+    parent: HTMLElement,
+    title: string,
+    tasks: ScrapedTask[],
+    totalCount: number,
+    isIgnored = false,
+  ): void {
+    const section = parent.createDiv({ cls: "qr-view-section" });
+    const head = section.createDiv({ cls: "qr-view-section-head" });
+    head.createSpan({ text: title, cls: "qr-view-section-title" });
+    head.createSpan({ text: `${tasks.length}/${totalCount}`, cls: "qr-view-section-count" });
+
+    if (tasks.length === 0) {
+      section.createDiv({
+        text: getEmptyScrapedText(title, totalCount),
+        cls: "qr-view-empty",
+      });
+      return;
+    }
+
+    for (const task of tasks.slice(0, 150)) {
+      this.renderScrapedRow(section, task, isIgnored);
+    }
+
+    if (tasks.length > 150) {
+      section.createDiv({
+        text: `${tasks.length - 150} more tasks hidden. Use filters to narrow this dashboard.`,
+        cls: "qr-view-empty",
+      });
+    }
+  }
+
+  private renderScrapedRow(parent: HTMLElement, task: ScrapedTask, isIgnored = false): void {
+    const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
+    row.toggleClass("qr-view-row-done", task.completed);
+    row.toggleClass("qr-view-row-ignored", isIgnored);
+    const body = row.createDiv({ cls: "qr-view-row-body" });
+    const badges = body.createDiv({ cls: "qr-task-badges" });
+    badges.createSpan({ text: getTaskBadgeText(task), cls: "qr-task-badge" });
+    if (isIgnored) {
+      badges.createSpan({ text: "Ignored", cls: "qr-task-badge qr-task-muted-badge" });
+    }
+    body.createDiv({ text: task.text, cls: "qr-view-row-text" });
+    const source = task.kind === "marker" && task.marker ? `${task.marker} · ` : "";
+    body.createDiv({
+      text: `${source}${task.filePath}:${task.line}`,
+      cls: "qr-view-row-when",
+    });
+
+    const actions = row.createDiv({ cls: "qr-view-row-actions" });
+    actions.createEl("button", { text: "Show", cls: "qr-row-btn" }).onclick = async () => {
+      await this.openTaskSource(task);
+    };
+
+    if (isIgnored) {
+      actions.createEl("button", { text: "Unignore", cls: "qr-row-btn" }).onclick = async () => {
+        await this.store.unignoreTask(task.id);
+        await this.render();
+        new Notice("Task unignored");
+      };
+      actions.createEl("button", { text: "Delete", cls: "qr-row-btn qr-view-del" }).onclick = async () => {
+        await this.deleteTask(task);
+      };
+      return;
+    }
+
+    if (task.kind === "checkbox") {
+      const doneBtn = actions.createEl("button", { text: task.completed ? "Done" : "Done", cls: "qr-row-btn qr-done-btn" });
+      doneBtn.disabled = task.completed;
+      doneBtn.onclick = async () => {
+        if (task.completed) return;
+        const completed = await this.taskScanner.completeCheckbox(task);
+        if (!completed) {
+          new Notice("Could not mark task done. Open the note and update it manually.");
+          return;
+        }
+        await this.refreshScrapedTasks();
+        await this.render();
+        new Notice("Task marked done");
+      };
+
+      actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
+        await this.editWithTasksPlugin(task);
+      };
+    }
+
+    actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = async () => {
+      await this.store.ignoreTask(task.id);
+      await this.render();
+      new Notice("Task ignored");
+    };
+
+    actions.createEl("button", { text: "Delete", cls: "qr-row-btn qr-view-del" }).onclick = async () => {
+      await this.deleteTask(task);
+    };
+
+    if (task.completed) {
+      return;
+    }
+
+    if (this.hasPendingReminderForTask(task)) {
+      const addedBtn = actions.createEl("button", {
+        text: "Added",
+        cls: "qr-row-btn",
+      });
+      addedBtn.disabled = true;
+      addedBtn.setAttr("aria-label", "Reminder already added for this task");
+      return;
+    }
+
+    const parsed = parseReminder(task.text);
+    const remindBtn = actions.createEl("button", {
+      text: parsed.dueAt && parsed.dueAt > Date.now() ? "Add reminder" : "Capture",
+      cls: "qr-row-btn",
+    });
+    remindBtn.onclick = async () => {
+      if (!hasFutureDueAt(parsed.dueAt)) {
+        this.openCaptureWithText(task.text, task.id);
+        return;
+      }
+
+      const reminder: Reminder = {
+        id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        text: parsed.text,
+        rawInput: task.text,
+        dueAt: parsed.dueAt,
+        createdAt: Date.now(),
+        notified: false,
+        sourceTaskId: task.id,
+      };
+      await this.store.add(reminder);
+      this.scheduler.schedule(reminder);
+      new Notice(`Reminder added from ${task.filePath}:${task.line}`);
+    };
+  }
+
+  private hasPendingReminderForTask(task: ScrapedTask): boolean {
+    return this.store.pending.some((reminder) => reminder.sourceTaskId === task.id);
+  }
+
+  private openCaptureWithText(text: string, sourceTaskId: string | null = null): void {
+    new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId).open();
+  }
+
+  private async openTaskSource(task: ScrapedTask): Promise<void> {
+    await this.app.workspace.openLinkText(task.filePath, "", false);
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (view) {
+      view.editor.setCursor({ line: task.line - 1, ch: 0 });
+      view.editor.focus();
+    }
+  }
+
+  private async editWithTasksPlugin(task: ScrapedTask): Promise<void> {
+    const api = getTasksPluginApi(this.app);
+    if (!api) {
+      new Notice("Tasks plugin API is not available. Reload or enable Tasks.");
+      return;
+    }
+
+    const currentLine = await this.taskScanner.readTaskLine(task);
+    if (!currentLine) {
+      new Notice("Could not read task line.");
+      return;
+    }
+
+    const nextLine = await api.editTaskLineModal(currentLine);
+    if (!nextLine || nextLine === currentLine) return;
+
+    const updated = await this.taskScanner.replaceTaskLine(task, nextLine);
+    if (!updated) {
+      new Notice("Could not update task line. Open the note and edit it manually.");
+      return;
+    }
+
+    await this.refreshScrapedTasks();
+    await this.render();
+    new Notice("Task updated");
+  }
+
+  private async deleteTask(task: ScrapedTask): Promise<void> {
+    const confirmed = window.confirm(`Delete this task from ${task.filePath}:${task.line}?`);
+    if (!confirmed) return;
+
+    const deleted = await this.taskScanner.deleteTaskLine(task);
+    if (!deleted) {
+      new Notice("Could not delete task. Open the note and update it manually.");
+      return;
+    }
+
+    await this.store.unignoreTask(task.id);
+    await this.refreshScrapedTasks();
+    await this.render();
+    new Notice("Task deleted");
+  }
+
+  private getFilteredScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
+    const query = this.taskSearch.trim().toLowerCase();
+    return tasks.filter((task) => {
+      if (this.sourceFilter !== "all" && task.kind !== this.sourceFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [task.text, task.filePath, task.marker ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }
+
+  showFolder(folderPath: string): void {
+    this.taskScope = "folder";
+    this.selectedFolderPath = folderPath;
+    void this.render(true);
+  }
+
+  setScope(scope: TaskScope): void {
+    this.taskScope = scope;
+    if (scope !== "folder") {
+      this.selectedFolderPath = null;
+    }
+    void this.render();
+  }
+
+  private getScopedScrapedTasks(activeFilePath: string | null, folderPath: string | null): ScrapedTask[] {
+    if (this.taskScope === "vault") {
+      return this.scrapedTasks;
+    }
+    if (this.taskScope === "folder") {
+      if (folderPath === null) {
+        return [];
+      }
+      return this.scrapedTasks.filter((task) => isInFolder(task.filePath, folderPath));
+    }
+    if (!activeFilePath) {
+      return [];
+    }
+    return this.scrapedTasks.filter((task) => task.filePath === activeFilePath);
+  }
+
+  private getScopedFolderPath(): string | null {
+    if (this.taskScope !== "folder") {
+      return null;
+    }
+    if (this.selectedFolderPath !== null) {
+      return this.selectedFolderPath;
+    }
+    return this.lastFolderPath;
+  }
+
+  private captureActiveMarkdownContext(): void {
+    const file = this.app.workspace.getActiveFile();
+    if (file?.extension === "md") {
+      this.lastMarkdownPath = file.path;
+      this.lastFolderPath = file.parent?.path ?? "";
+    }
+  }
+
+  private async openAsMainTab(): Promise<void> {
+    const leaf = this.getExistingMainLeaf() ?? this.app.workspace.getLeaf("tab");
+    if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
+      await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.rightSplit.collapse();
+    if (leaf.view instanceof ReminderView) {
+      leaf.view.taskScope = this.taskScope;
+      leaf.view.selectedFolderPath = this.selectedFolderPath;
+      leaf.view.lastMarkdownPath = this.lastMarkdownPath;
+      leaf.view.lastFolderPath = this.lastFolderPath;
+      leaf.view.sourceFilter = this.sourceFilter;
+      leaf.view.taskSearch = this.taskSearch;
+      void leaf.view.render(true);
+    }
+    this.closeMainManagerLeaves(leaf);
+  }
+
+  private async openAsSidebar(): Promise<void> {
+    const state = {
+      taskScope: this.taskScope,
+      selectedFolderPath: this.selectedFolderPath,
+      lastMarkdownPath: this.lastMarkdownPath,
+      lastFolderPath: this.lastFolderPath,
+      sourceFilter: this.sourceFilter,
+      taskSearch: this.taskSearch,
+    };
+
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
+      if (leaf.view.containerEl.closest(".mod-right-split")) {
+        leaf.detach();
+      }
+    }
+
+    const leaf = await this.openSidebarLeaf();
+    if (!leaf) {
+      new Notice("Quick Reminder could not open the right sidebar.");
+      return;
+    }
+    this.app.workspace.rightSplit.expand();
+    await this.app.workspace.revealLeaf(leaf);
+    if (leaf.view instanceof ReminderView) {
+      leaf.view.taskScope = state.taskScope;
+      leaf.view.selectedFolderPath = state.selectedFolderPath;
+      leaf.view.lastMarkdownPath = state.lastMarkdownPath;
+      leaf.view.lastFolderPath = state.lastFolderPath;
+      leaf.view.sourceFilter = state.sourceFilter;
+      leaf.view.taskSearch = state.taskSearch;
+      void leaf.view.render(true);
+    }
+    this.closeOtherManagerLeaves(leaf);
+  }
+
+  private getExistingMainLeaf(): WorkspaceLeaf | null {
+    return this.app.workspace
+      .getLeavesOfType(VIEW_TYPE_REMINDER)
+      .find((leaf) => !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) ?? null;
+  }
+
+  private getExistingSidebarLeaf(): WorkspaceLeaf | null {
+    return this.app.workspace
+      .getLeavesOfType(VIEW_TYPE_REMINDER)
+      .find((leaf) => leaf.view.containerEl.closest(".mod-right-split")) ?? null;
+  }
+
+  private closeMainManagerLeaves(keepLeaf: WorkspaceLeaf): void {
+    window.setTimeout(() => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
+        if (leaf === keepLeaf) continue;
+        if (leaf.view.containerEl.closest(".mod-right-split")) continue;
+        leaf.detach();
+      }
+    }, 0);
+  }
+
+  private closeOtherManagerLeaves(keepLeaf: WorkspaceLeaf): void {
+    window.setTimeout(() => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
+        if (leaf !== keepLeaf) {
+          leaf.detach();
+        }
+      }
+    }, 0);
+  }
+
+  private async openSidebarLeaf(): Promise<WorkspaceLeaf | null> {
+    this.app.workspace.rightSplit.expand();
+
+    const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getRightLeaf(true);
+    if (!leaf) return null;
+    await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    await leaf.loadIfDeferred();
+    return leaf;
+  }
+
+  private isMainWorkspaceView(): boolean {
+    return !this.containerEl.closest(".mod-left-split, .mod-right-split");
+  }
 }
 
-function getSummaryText(overdueCount: number, upcomingCount: number): string {
+interface TasksPluginApi {
+  editTaskLineModal(line: string): Promise<string>;
+}
+
+function getTasksPluginApi(app: unknown): TasksPluginApi | null {
+  const tasksPlugin = (app as {
+    plugins?: { plugins?: Record<string, unknown> };
+  }).plugins?.plugins?.["obsidian-tasks-plugin"] as { apiV1?: unknown } | undefined;
+  const api = tasksPlugin?.apiV1 as Partial<TasksPluginApi> | undefined;
+  return typeof api?.editTaskLineModal === "function" ? (api as TasksPluginApi) : null;
+}
+
+function getSummaryText(
+  overdueCount: number,
+  upcomingCount: number,
+  scrapedCount: number,
+  taskScope: TaskScope,
+  activeFilePath: string | null,
+  folderPath: string | null,
+): string {
+  const taskLabel = getTaskScopeLabel(taskScope, activeFilePath, folderPath);
   if (overdueCount > 0) {
-    return `${overdueCount} overdue · ${upcomingCount} upcoming`;
+    return `${overdueCount} overdue · ${upcomingCount} upcoming · ${scrapedCount} ${taskLabel}`;
   }
   if (upcomingCount > 0) {
-    return `${upcomingCount} upcoming`;
+    return `${upcomingCount} upcoming · ${scrapedCount} ${taskLabel}`;
+  }
+  if (scrapedCount > 0) {
+    return `${scrapedCount} ${taskLabel}`;
+  }
+  if (taskScope === "active" && !activeFilePath) {
+    return "No active markdown file";
+  }
+  if (taskScope === "folder" && folderPath === null) {
+    return "No active folder";
   }
   return "Nothing pending";
+}
+
+function getTaskScopeLabel(taskScope: TaskScope, activeFilePath: string | null, folderPath: string | null): string {
+  if (taskScope === "folder" && folderPath !== null) {
+    return "folder tasks";
+  }
+  if (taskScope === "active" && activeFilePath) {
+    return "current file tasks";
+  }
+  return "vault tasks";
+}
+
+function isInFolder(filePath: string, folderPath: string): boolean {
+  if (folderPath === "") {
+    return !filePath.includes("/");
+  }
+  return filePath === folderPath || filePath.startsWith(`${folderPath}/`);
+}
+
+function getEmptyScrapedText(title: string, totalCount: number): string {
+  if (totalCount > 0) {
+    return "No tasks match the current filters.";
+  }
+  if (title === "Completed vault tasks") {
+    return "No completed vault tasks found.";
+  }
+  if (title === "Ignored") {
+    return "No ignored tasks.";
+  }
+  return "No unchecked tasks or TODO markers found.";
+}
+
+function getTaskBadgeText(task: ScrapedTask): string {
+  if (task.completed) {
+    return "Completed";
+  }
+  return task.kind === "checkbox" ? "Task" : task.marker ?? "Marker";
 }
 
 function getEmptyText(title: string, isHistory: boolean): string {
@@ -293,4 +840,8 @@ function formatInputDate(ms: number): string {
   const date = new Date(ms);
   const offsetMs = date.getTimezoneOffset() * 60_000;
   return new Date(ms - offsetMs).toISOString().slice(0, 16);
+}
+
+function hasFutureDueAt(dueAt: number | null): dueAt is number {
+  return dueAt !== null && dueAt > Date.now();
 }

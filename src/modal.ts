@@ -14,6 +14,8 @@ export class QuickCaptureModal extends Modal {
     app: App,
     private store: ReminderStore,
     private scheduler: Scheduler,
+    private initialInput = "",
+    private sourceTaskId: string | null = null,
   ) {
     super(app);
   }
@@ -39,7 +41,11 @@ export class QuickCaptureModal extends Modal {
       placeholder: "e.g. call mom tomorrow at 3pm",
       cls: "qr-input",
     });
+    this.setInput(this.initialInput);
     this.inputEl.focus();
+    if (this.initialInput) {
+      this.inputEl.select();
+    }
 
     this.previewEl = contentEl.createDiv({ cls: "qr-preview" });
     this.renderPreview();
@@ -116,6 +122,11 @@ export class QuickCaptureModal extends Modal {
     row.createSpan({ text: value, cls });
   }
 
+  private setInput(value: string): void {
+    this.inputEl.value = value;
+    this.currentParse = parseReminder(value);
+  }
+
   private updateSaveState(): void {
     if (!this.saveButtonEl) return;
     const { text, dueAt } = this.currentParse;
@@ -146,6 +157,9 @@ export class QuickCaptureModal extends Modal {
       createdAt: Date.now(),
       notified: false,
     };
+    if (this.sourceTaskId) {
+      reminder.sourceTaskId = this.sourceTaskId;
+    }
 
     await this.store.add(reminder);
     this.scheduler.schedule(reminder);

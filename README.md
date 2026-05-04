@@ -10,6 +10,7 @@ Natural-language task capture with native OS notifications for Obsidian. Built b
 - **Markdown mirror** - keeps a `Reminders.md` file in your vault synced with pending + notified reminders.
 - **Launch-time catch-up** - fires any reminders that went overdue while Obsidian was closed.
 - **Reminder manager** - done, snooze, edit, restore, re-add, and delete from one sidebar.
+- **Vault task dashboard** - scans notes for unchecked Markdown tasks plus `TODO:`, `FIXME:`, and `TASK:` markers.
 
 ## Install
 
@@ -49,7 +50,19 @@ To update manually inside Obsidian:
 | Open reminder manager | Click the ribbon checklist icon, or command palette -> "Open reminder manager" |
 | Open capture modal | Command palette -> "Quick capture reminder", or the manager's New button |
 | View/snooze/edit/done reminders | Reminder manager |
+| Scan vault tasks | Reminder manager -> Scan |
 | Change snooze default, mirror file, etc. | Settings -> Quick Reminder |
+
+### Vault task dashboard
+
+The reminder manager includes a **Vault tasks** section that scrapes your current Obsidian vault for:
+
+- unchecked Markdown tasks like `- [ ] follow up with Alex`
+- explicit uppercase marker lines like `TODO: renew license`, `FIXME: update draft`, or `TASK: prep agenda`
+
+Use **Open** to jump to the source note and line. Use **Add reminder** when the task text contains a detectable time, or **Capture** to open the reminder modal prefilled with the task text.
+
+Tasks are grouped by project. Notes under `Projects/<project name>/...` use `<project name>` as the project; other notes use their top-level folder or note name. Use the search box and project/source filters to narrow the dashboard. Checkbox tasks also have a **Done** action that updates the source note from `- [ ]` to `- [x]`.
 
 ### Example inputs
 
@@ -70,6 +83,7 @@ src/
   parser.ts      # chrono-node wrapper, strips date phrase from task text
   scheduler.ts   # setTimeout queue + native notification firing
   store.ts       # Plugin data persistence + Reminders.md mirror
+  taskScanner.ts # Vault Markdown task/TODO scanner
   types.ts       # Shared types + defaults
   updater.ts     # GitHub release update installer
 ```
