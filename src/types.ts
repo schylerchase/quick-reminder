@@ -27,6 +27,7 @@ export interface ScrapedTask {
 export interface PluginData {
   reminders: Reminder[];
   ignoredTaskIds: string[];
+  ignoredTaskNotes?: Record<string, string>;
   settings: Settings;
 }
 

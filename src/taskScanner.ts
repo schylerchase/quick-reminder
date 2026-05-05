@@ -57,6 +57,22 @@ export class TaskScanner {
     return true;
   }
 
+  async uncompleteCheckbox(task: ScrapedTask): Promise<boolean> {
+    if (task.kind !== "checkbox") return false;
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) return false;
+
+    const content = await this.app.vault.read(file);
+    const lines = content.split(/\r?\n/);
+    const index = task.line - 1;
+    const line = lines[index];
+    if (!line || !CHECKBOX_TASK_RE.test(line)) return false;
+
+    lines[index] = line.replace(/\[[^\]]\]/, "[ ]");
+    await this.app.vault.modify(file, lines.join(content.includes("\r\n") ? "\r\n" : "\n"));
+    return true;
+  }
+
   async readTaskLine(task: ScrapedTask): Promise<string | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) return null;

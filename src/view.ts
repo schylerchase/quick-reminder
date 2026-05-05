@@ -21,6 +21,7 @@ export class ReminderView extends ItemView {
   private refreshHandler = () => {
     void this.render();
   };
+  private collapsedSections = new Set<string>(["Completed vault tasks", "Ignored", "History"]);
   private editingId: string | null = null;
   private scrapedTasks: ScrapedTask[] = [];
   private hasScannedTasks = false;
@@ -106,6 +107,7 @@ export class ReminderView extends ItemView {
     const folderPath = this.getScopedFolderPath();
     const scraped = this.getScopedScrapedTasks(activeFilePath, folderPath);
     const ignoredTaskIds = this.store.ignoredTaskIds;
+    const ignoredTaskNotes = this.store.ignoredTaskNotes;
     const unignoredScraped = scraped.filter((task) => !ignoredTaskIds.has(task.id));
     const filteredScraped = this.getFilteredScrapedTasks(unignoredScraped);
     const activeScraped = filteredScraped.filter((task) => !task.completed);
@@ -161,7 +163,7 @@ export class ReminderView extends ItemView {
     this.renderSection(container as HTMLElement, "Upcoming", upcoming, false);
     this.renderScrapedSection(container as HTMLElement, "Vault tasks", activeScraped, unignoredScraped.filter((task) => !task.completed).length);
     this.renderScrapedSection(container as HTMLElement, "Completed vault tasks", completedScraped, unignoredScraped.filter((task) => task.completed).length);
-    this.renderScrapedSection(container as HTMLElement, "Ignored", ignoredScraped, scopedIgnoredScraped.length, true);
+    this.renderScrapedSection(container as HTMLElement, "Ignored", ignoredScraped, scopedIgnoredScraped.length, true, ignoredTaskNotes);
     this.renderSection(container as HTMLElement, "History", done, true);
   }
 
@@ -205,12 +207,9 @@ export class ReminderView extends ItemView {
     isHistory: boolean,
   ): void {
     const section = parent.createDiv({ cls: "qr-view-section" });
-    const head = section.createDiv({ cls: "qr-view-section-head" });
-    head.createSpan({ text: title, cls: "qr-view-section-title" });
-    head.createSpan({
-      text: String(items.length),
-      cls: "qr-view-section-count",
-    });
+    const collapsed = this.isSectionCollapsed(title);
+    this.renderSectionHead(section, title, String(items.length), collapsed);
+    if (collapsed) return;
 
     if (items.length === 0) {
       section.createDiv({
@@ -380,11 +379,12 @@ export class ReminderView extends ItemView {
     tasks: ScrapedTask[],
     totalCount: number,
     isIgnored = false,
+    ignoredTaskNotes: Readonly<Record<string, string>> = {},
   ): void {
     const section = parent.createDiv({ cls: "qr-view-section" });
-    const head = section.createDiv({ cls: "qr-view-section-head" });
-    head.createSpan({ text: title, cls: "qr-view-section-title" });
-    head.createSpan({ text: `${tasks.length}/${totalCount}`, cls: "qr-view-section-count" });
+    const collapsed = this.isSectionCollapsed(title);
+    this.renderSectionHead(section, title, `${tasks.length}/${totalCount}`, collapsed);
+    if (collapsed) return;
 
     if (tasks.length === 0) {
       section.createDiv({
@@ -395,7 +395,7 @@ export class ReminderView extends ItemView {
     }
 
     for (const task of tasks.slice(0, 150)) {
-      this.renderScrapedRow(section, task, isIgnored);
+      this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "");
     }
 
     if (tasks.length > 150) {
@@ -406,7 +406,39 @@ export class ReminderView extends ItemView {
     }
   }
 
-  private renderScrapedRow(parent: HTMLElement, task: ScrapedTask, isIgnored = false): void {
+  private renderSectionHead(parent: HTMLElement, title: string, count: string, collapsed: boolean): void {
+    const head = parent.createDiv({ cls: "qr-view-section-head" });
+    head.toggleClass("is-collapsed", collapsed);
+    head.setAttr("role", "button");
+    head.setAttr("tabindex", "0");
+    head.setAttr("aria-expanded", String(!collapsed));
+
+    const label = head.createSpan({ cls: "qr-view-section-label" });
+    label.createSpan({ text: collapsed ? ">" : "v", cls: "qr-view-section-caret" });
+    label.createSpan({ text: title, cls: "qr-view-section-title" });
+    head.createSpan({ text: count, cls: "qr-view-section-count" });
+
+    const toggle = () => {
+      if (this.collapsedSections.has(title)) {
+        this.collapsedSections.delete(title);
+      } else {
+        this.collapsedSections.add(title);
+      }
+      void this.render();
+    };
+    head.onclick = toggle;
+    head.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle();
+    };
+  }
+
+  private isSectionCollapsed(title: string): boolean {
+    return this.collapsedSections.has(title);
+  }
+
+  private renderScrapedRow(parent: HTMLElement, task: ScrapedTask, isIgnored = false, ignoredNote = ""): void {
     const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
@@ -422,6 +454,9 @@ export class ReminderView extends ItemView {
       text: `${source}${task.filePath}:${task.line}`,
       cls: "qr-view-row-when",
     });
+    if (isIgnored && ignoredNote) {
+      body.createDiv({ text: ignoredNote, cls: "qr-view-row-note" });
+    }
 
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
     actions.createEl("button", { text: "Show", cls: "qr-row-btn" }).onclick = async () => {
@@ -442,18 +477,21 @@ export class ReminderView extends ItemView {
     }
 
     if (task.kind === "checkbox") {
-      const doneBtn = actions.createEl("button", { text: task.completed ? "Done" : "Done", cls: "qr-row-btn qr-done-btn" });
-      doneBtn.disabled = task.completed;
+      const doneBtn = actions.createEl("button", {
+        text: task.completed ? "Not done?" : "Done",
+        cls: "qr-row-btn qr-done-btn",
+      });
       doneBtn.onclick = async () => {
-        if (task.completed) return;
-        const completed = await this.taskScanner.completeCheckbox(task);
-        if (!completed) {
-          new Notice("Could not mark task done. Open the note and update it manually.");
+        const updated = task.completed
+          ? await this.taskScanner.uncompleteCheckbox(task)
+          : await this.taskScanner.completeCheckbox(task);
+        if (!updated) {
+          new Notice("Could not update task. Open the note and update it manually.");
           return;
         }
         await this.refreshScrapedTasks();
         await this.render();
-        new Notice("Task marked done");
+        new Notice(task.completed ? "Task marked not done" : "Task marked done");
       };
 
       actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
@@ -463,12 +501,6 @@ export class ReminderView extends ItemView {
 
     this.addScrapedRowContextMenu(row, task, isIgnored);
 
-    actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = async () => {
-      await this.store.ignoreTask(task.id);
-      await this.render();
-      new Notice("Task ignored");
-    };
-
     actions.createEl("button", { text: "Delete", cls: "qr-row-btn qr-view-del" }).onclick = async () => {
       await this.deleteTask(task);
     };
@@ -476,6 +508,10 @@ export class ReminderView extends ItemView {
     if (task.completed) {
       return;
     }
+
+    actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = async () => {
+      await this.ignoreTaskWithOptionalNote(task);
+    };
 
     if (this.hasPendingReminderForTask(task)) {
       const addedBtn = actions.createEl("button", {
@@ -523,6 +559,13 @@ export class ReminderView extends ItemView {
     return this.store.pending.some((reminder) => reminder.sourceTaskId === task.id);
   }
 
+  private async ignoreTaskWithOptionalNote(task: ScrapedTask): Promise<void> {
+    const note = window.prompt("Optional note for ignoring this task:", "") ?? "";
+    await this.store.ignoreTask(task.id, note);
+    await this.render();
+    new Notice("Task ignored");
+  }
+
   private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
     row.oncontextmenu = (event) => {
       event.preventDefault();
@@ -568,13 +611,13 @@ export class ReminderView extends ItemView {
               void this.store.unignoreTask(task.id).then(() => this.render());
             });
         });
-      } else {
+      } else if (!task.completed) {
         menu.addItem((item) => {
           item
             .setTitle("Ignore task")
             .setIcon("eye-off")
             .onClick(() => {
-              void this.store.ignoreTask(task.id).then(() => this.render());
+              void this.ignoreTaskWithOptionalNote(task);
             });
         });
       }

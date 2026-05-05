@@ -18,7 +18,7 @@ export class ReminderStore {
     private load: () => Promise<PluginData | null>,
     private save: (data: PluginData) => Promise<void>,
   ) {
-    this.data = { reminders: [], ignoredTaskIds: [], settings: { ...DEFAULT_SETTINGS } };
+    this.data = { reminders: [], ignoredTaskIds: [], ignoredTaskNotes: {}, settings: { ...DEFAULT_SETTINGS } };
   }
 
   onChange(fn: () => void): void {
@@ -45,6 +45,7 @@ export class ReminderStore {
       this.data = {
         reminders: loaded.reminders ?? [],
         ignoredTaskIds: loaded.ignoredTaskIds ?? [],
+        ignoredTaskNotes: loaded.ignoredTaskNotes ?? {},
         settings: { ...DEFAULT_SETTINGS, ...(loaded.settings ?? {}) },
       };
     }
@@ -75,6 +76,10 @@ export class ReminderStore {
 
   get ignoredTaskIds(): Set<string> {
     return new Set(this.data.ignoredTaskIds ?? []);
+  }
+
+  get ignoredTaskNotes(): Readonly<Record<string, string>> {
+    return this.data.ignoredTaskNotes ?? {};
   }
 
   async add(reminder: Reminder): Promise<void> {
@@ -132,15 +137,25 @@ export class ReminderStore {
     await this.persist();
   }
 
-  async ignoreTask(id: string): Promise<void> {
+  async ignoreTask(id: string, note = ""): Promise<void> {
     if (!this.data.ignoredTaskIds.includes(id)) {
       this.data.ignoredTaskIds.push(id);
-      await this.persist();
     }
+    this.data.ignoredTaskNotes = this.data.ignoredTaskNotes ?? {};
+    const trimmedNote = note.trim();
+    if (trimmedNote) {
+      this.data.ignoredTaskNotes[id] = trimmedNote;
+    } else {
+      delete this.data.ignoredTaskNotes[id];
+    }
+    await this.persist();
   }
 
   async unignoreTask(id: string): Promise<void> {
     this.data.ignoredTaskIds = this.data.ignoredTaskIds.filter((taskId) => taskId !== id);
+    if (this.data.ignoredTaskNotes) {
+      delete this.data.ignoredTaskNotes[id];
+    }
     await this.persist();
   }
 
