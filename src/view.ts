@@ -1,4 +1,4 @@
-import { EventRef, ItemView, MarkdownView, Menu, Notice, WorkspaceLeaf } from "obsidian";
+import { App, EventRef, ItemView, MarkdownView, Menu, Modal, Notice, WorkspaceLeaf } from "obsidian";
 import { Reminder, ScrapedTask } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
@@ -509,8 +509,8 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = async () => {
-      await this.ignoreTaskWithOptionalNote(task);
+    actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = () => {
+      this.openIgnoreTaskModal(task);
     };
 
     if (this.hasPendingReminderForTask(task)) {
@@ -559,11 +559,12 @@ export class ReminderView extends ItemView {
     return this.store.pending.some((reminder) => reminder.sourceTaskId === task.id);
   }
 
-  private async ignoreTaskWithOptionalNote(task: ScrapedTask): Promise<void> {
-    const note = window.prompt("Optional note for ignoring this task:", "") ?? "";
-    await this.store.ignoreTask(task.id, note);
-    await this.render();
-    new Notice("Task ignored");
+  private openIgnoreTaskModal(task: ScrapedTask): void {
+    new IgnoreTaskModal(this.app, task, async (note) => {
+      await this.store.ignoreTask(task.id, note);
+      await this.render();
+      new Notice("Task ignored");
+    }).open();
   }
 
   private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
@@ -617,7 +618,7 @@ export class ReminderView extends ItemView {
             .setTitle("Ignore task")
             .setIcon("eye-off")
             .onClick(() => {
-              void this.ignoreTaskWithOptionalNote(task);
+              this.openIgnoreTaskModal(task);
             });
         });
       }
@@ -922,6 +923,62 @@ export class ReminderView extends ItemView {
 
 interface TasksPluginApi {
   editTaskLineModal(line: string): Promise<string>;
+}
+
+class IgnoreTaskModal extends Modal {
+  private noteEl!: HTMLTextAreaElement;
+
+  constructor(
+    app: App,
+    private task: ScrapedTask,
+    private onSubmit: (note: string) => void | Promise<void>,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("qr-modal");
+
+    const header = contentEl.createDiv({ cls: "qr-modal-header" });
+    header.createEl("h2", { text: "Ignore task" });
+
+    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
+
+    const field = contentEl.createDiv({ cls: "qr-field" });
+    field.createEl("label", {
+      text: "Note",
+      cls: "qr-field-label",
+      attr: { for: "qr-ignore-note" },
+    });
+    this.noteEl = field.createEl("textarea", {
+      attr: { id: "qr-ignore-note" },
+      cls: "qr-ignore-note-input",
+    });
+    this.noteEl.rows = 4;
+    this.noteEl.placeholder = "Optional reason";
+
+    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
+      this.close();
+    };
+    actions.createEl("button", { text: "Ignore", cls: "qr-primary-btn" }).onclick = () => {
+      void this.submit();
+    };
+
+    window.setTimeout(() => this.noteEl.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+
+  private async submit(): Promise<void> {
+    const note = this.noteEl.value.trim();
+    await this.onSubmit(note);
+    this.close();
+  }
 }
 
 function getTasksPluginApi(app: unknown): TasksPluginApi | null {

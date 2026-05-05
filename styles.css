@@ -376,6 +376,26 @@
   font-size: 0.78em;
   overflow-wrap: break-word;
 }
+.qr-ignore-task-text {
+  margin-bottom: 0.8em;
+  padding: 0.55em 0.65em;
+  border-left: 2px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 0.9em;
+  overflow-wrap: break-word;
+}
+.qr-ignore-note-input {
+  width: 100%;
+  min-height: 5em;
+  resize: vertical;
+  padding: 0.45em 0.55em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 0.9em;
+}
 .qr-view-row-actions {
   display: flex;
   flex-wrap: wrap;
