@@ -1,7 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import { ScrapedTask } from "./types";
 
-const CHECKBOX_TASK_RE = /^\s*[-*+]\s+\[(?<status>[\sxX])\]\s+(?<text>.+)$/;
+const CHECKBOX_TASK_RE = /^\s*[-*+]\s+\[(?<status>[^\]])\]\s+(?<text>.+)$/;
 const TODO_MARKER_RE = /^\s*(?:[-*+]\s+)?(?<marker>TODO|FIXME|TASK):\s*(?<text>.+)$/;
 const FENCE_RE = /^\s*(```|~~~)/;
 

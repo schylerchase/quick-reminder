@@ -23,6 +23,7 @@ export class ReminderView extends ItemView {
   };
   private editingId: string | null = null;
   private scrapedTasks: ScrapedTask[] = [];
+  private hasScannedTasks = false;
   private isScanningTasks = false;
   private taskSearch = "";
   private taskScope: TaskScope = "folder";
@@ -68,9 +69,9 @@ export class ReminderView extends ItemView {
         this.selectedFolderPath = null;
       }
       if (this.taskScope === "active" || previousFolderPath !== this.getScopedFolderPath()) {
-        void this.render();
+        void this.render(true);
       } else if (file?.extension === "md" && this.taskScope === "folder" && this.selectedFolderPath === null) {
-        void this.render();
+        void this.render(true);
       }
     });
     await this.render(true);
@@ -85,7 +86,7 @@ export class ReminderView extends ItemView {
   }
 
   private async render(scanVaultTasks = false): Promise<void> {
-    if (scanVaultTasks && !this.isScanningTasks) {
+    if ((scanVaultTasks || !this.hasScannedTasks) && !this.isScanningTasks) {
       await this.refreshScrapedTasks();
     }
 
@@ -168,6 +169,7 @@ export class ReminderView extends ItemView {
     this.isScanningTasks = true;
     try {
       this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
+      this.hasScannedTasks = true;
     } catch (error) {
       console.error("Quick Reminder task scan failed", error);
       new Notice("Quick Reminder could not scan vault tasks.");
@@ -353,7 +355,7 @@ export class ReminderView extends ItemView {
     scopeSelect.onchange = () => {
       this.taskScope = scopeSelect.value as TaskScope;
       this.selectedFolderPath = null;
-      void this.render();
+      void this.render(true);
     };
 
     const sourceSelect = toolbar.createEl("select", { cls: "qr-task-select" });
