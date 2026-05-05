@@ -51,18 +51,35 @@ To update manually inside Obsidian:
 | Open capture modal | Command palette -> "Quick capture reminder", or the manager's New button |
 | View/snooze/edit/done reminders | Reminder manager |
 | Scan vault tasks | Reminder manager -> Scan |
+| Insert task sections | Command palette -> "Insert task sections" |
 | Change snooze default, mirror file, etc. | Settings -> Quick Reminder |
 
 ### Vault task dashboard
 
 The reminder manager includes a **Vault tasks** section that scrapes your current Obsidian vault for:
 
-- unchecked Markdown tasks like `- [ ] follow up with Alex`
+- Markdown tasks like `- [ ] follow up with Alex`, in-progress `- [/]` items, and completed `- [x]` items
 - explicit uppercase marker lines like `TODO: renew license`, `FIXME: update draft`, or `TASK: prep agenda`
 
-Use **Open** to jump to the source note and line. Use **Add reminder** when the task text contains a detectable time, or **Capture** to open the reminder modal prefilled with the task text.
+Use **Show** to jump to the source note and line. Use **Add reminder** when the task text contains a detectable time, or capture a reminder from task text with the context menu.
 
-Tasks are grouped by project. Notes under `Projects/<project name>/...` use `<project name>` as the project; other notes use their top-level folder or note name. Use the search box and project/source filters to narrow the dashboard. Checkbox tasks also have a **Done** action that updates the source note from `- [ ]` to `- [x]`.
+Tasks are sorted into **In Progress**, **To Do**, **Markers**, and **Completed**, then grouped by the nearest markdown heading above each task. Notes under `Projects/<project name>/...` use `<project name>` as the project; other notes use their top-level folder or note name. Use the search box and source filters to narrow the dashboard. Checkbox tasks have quick **In progress**, **To do**, **Done**, and **Edit** actions that update the source note. While the manager is open, markdown saves, creates, deletes, and renames trigger a debounced refresh so new tasks appear without rescanning on every edit.
+
+### Task section templates
+
+Quick Reminder ships with default task section headings:
+
+```md
+## Tasks
+
+### In Progress
+
+### To Do
+
+### Completed
+```
+
+Use **Insert task sections** to add them to the active note. You can change the headings in settings. Optional auto-insert can add the sections to empty new markdown notes in selected vault folders; it is off by default for new users.
 
 ### Example inputs
 

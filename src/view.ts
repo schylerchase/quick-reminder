@@ -1,4 +1,16 @@
-import { App, EventRef, ItemView, MarkdownView, Menu, Modal, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import {
+  App,
+  EventRef,
+  ItemView,
+  MarkdownView,
+  Menu,
+  Modal,
+  Notice,
+  TAbstractFile,
+  TFile,
+  WorkspaceLeaf,
+  normalizePath,
+} from "obsidian";
 import { Reminder, ScrapedTask } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
@@ -36,6 +48,7 @@ export class ReminderView extends ItemView {
   private sourceFilter: "all" | "checkbox" | "marker" = "all";
   private taskSort: TaskSort = "page";
   private fileOpenRef: EventRef | null = null;
+  private scanDebounceHandle: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -78,6 +91,16 @@ export class ReminderView extends ItemView {
         void this.render(true);
       }
     });
+    this.registerEvent(this.app.vault.on("modify", (file) => this.queueTaskRefreshForFile(file)));
+    this.registerEvent(this.app.vault.on("create", (file) => this.queueTaskRefreshForFile(file)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.queueTaskRefreshForFile(file)));
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (this.shouldRefreshForVaultFile(file) || this.isScannedMarkdownPath(oldPath)) {
+          this.queueTaskRefresh();
+        }
+      }),
+    );
     await this.render(true);
   }
 
@@ -86,6 +109,10 @@ export class ReminderView extends ItemView {
     if (this.fileOpenRef) {
       this.app.workspace.offref(this.fileOpenRef);
       this.fileOpenRef = null;
+    }
+    if (this.scanDebounceHandle !== null) {
+      window.clearTimeout(this.scanDebounceHandle);
+      this.scanDebounceHandle = null;
     }
   }
 
@@ -181,6 +208,33 @@ export class ReminderView extends ItemView {
     } finally {
       this.isScanningTasks = false;
     }
+  }
+
+  private queueTaskRefreshForFile(file: TAbstractFile): void {
+    if (this.shouldRefreshForVaultFile(file)) {
+      this.queueTaskRefresh();
+    }
+  }
+
+  private shouldRefreshForVaultFile(file: TAbstractFile): boolean {
+    return file instanceof TFile && this.isScannedMarkdownPath(file.path);
+  }
+
+  private isScannedMarkdownPath(path: string): boolean {
+    const normalizedPath = normalizePath(path);
+    return normalizedPath.endsWith(".md") && normalizedPath !== normalizePath(this.store.settings.mirrorFilePath);
+  }
+
+  private queueTaskRefresh(): void {
+    if (this.scanDebounceHandle !== null) {
+      window.clearTimeout(this.scanDebounceHandle);
+    }
+
+    this.scanDebounceHandle = window.setTimeout(async () => {
+      this.scanDebounceHandle = null;
+      await this.refreshScrapedTasks();
+      await this.render();
+    }, 800);
   }
 
   private renderStats(
@@ -406,8 +460,20 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    for (const task of tasks.slice(0, 150)) {
-      this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "");
+    const visibleTasks = tasks.slice(0, 150);
+    for (const group of groupTasksForDisplay(visibleTasks)) {
+      if (group.title !== title) {
+        section.createDiv({ text: group.title, cls: "qr-task-group-title" });
+      }
+
+      for (const category of group.categories) {
+        if (category.title && category.title !== group.title) {
+          section.createDiv({ text: category.title, cls: "qr-task-category-title" });
+        }
+        for (const task of category.tasks) {
+          this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "");
+        }
+      }
     }
 
     if (tasks.length > 150) {
@@ -489,21 +555,20 @@ export class ReminderView extends ItemView {
     }
 
     if (task.kind === "checkbox") {
+      if (!task.completed) {
+        const progressLabel = task.status === "in-progress" ? "To do" : "In progress";
+        const progressStatus = task.status === "in-progress" ? "todo" : "in-progress";
+        actions.createEl("button", { text: progressLabel, cls: "qr-row-btn qr-progress-btn" }).onclick = async () => {
+          await this.updateTaskStatus(task, progressStatus, `Task marked ${progressLabel.toLowerCase()}`);
+        };
+      }
+
       const doneBtn = actions.createEl("button", {
-        text: task.completed ? "Not done?" : "Done",
+        text: task.completed ? "To do" : "Done",
         cls: "qr-row-btn qr-done-btn",
       });
       doneBtn.onclick = async () => {
-        const updated = task.completed
-          ? await this.taskScanner.uncompleteCheckbox(task)
-          : await this.taskScanner.completeCheckbox(task);
-        if (!updated) {
-          new Notice("Could not update task. Open the note and update it manually.");
-          return;
-        }
-        await this.refreshScrapedTasks();
-        await this.render();
-        new Notice(task.completed ? "Task marked not done" : "Task marked done");
+        await this.updateTaskStatus(task, task.completed ? "todo" : "completed", task.completed ? "Task marked to do" : "Task marked done");
       };
 
       actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
@@ -653,6 +718,21 @@ export class ReminderView extends ItemView {
     new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId, null, false).open();
   }
 
+  private async updateTaskStatus(
+    task: ScrapedTask,
+    status: "todo" | "in-progress" | "completed",
+    successMessage: string,
+  ): Promise<void> {
+    const updated = await this.taskScanner.setCheckboxStatus(task, status);
+    if (!updated) {
+      new Notice("Could not update task. Open the note and update it manually.");
+      return;
+    }
+    await this.refreshScrapedTasks();
+    await this.render();
+    new Notice(successMessage);
+  }
+
   private async openTaskSource(task: ScrapedTask): Promise<void> {
     await this.app.workspace.openLinkText(task.filePath, "", false);
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -743,7 +823,7 @@ export class ReminderView extends ItemView {
       if (!query) {
         return true;
       }
-      return [task.text, task.filePath, task.marker ?? ""]
+      return [task.text, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
         .join(" ")
         .toLowerCase()
         .includes(query);
@@ -1090,6 +1170,59 @@ function isInFolder(filePath: string, folderPath: string): boolean {
   return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
 }
 
+type TaskDisplayGroup = {
+  title: string;
+  categories: Array<{
+    title: string;
+    tasks: ScrapedTask[];
+  }>;
+};
+
+function groupTasksForDisplay(tasks: ScrapedTask[]): TaskDisplayGroup[] {
+  const statusOrder: Array<ScrapedTask["status"]> = ["in-progress", "todo", "marker", "completed"];
+  const groups: TaskDisplayGroup[] = [];
+
+  for (const status of statusOrder) {
+    const statusTasks = tasks.filter((task) => task.status === status);
+    if (statusTasks.length === 0) {
+      continue;
+    }
+
+    const title = getTaskStatusTitle(status);
+    const categories: TaskDisplayGroup["categories"] = [];
+    for (const task of statusTasks) {
+      const categoryTitle = getTaskCategoryTitle(task, title);
+      let category = categories.find((candidate) => candidate.title === categoryTitle);
+      if (!category) {
+        category = { title: categoryTitle, tasks: [] };
+        categories.push(category);
+      }
+      category.tasks.push(task);
+    }
+    groups.push({ title, categories });
+  }
+
+  return groups;
+}
+
+function getTaskStatusTitle(status: ScrapedTask["status"]): string {
+  if (status === "in-progress") {
+    return "In Progress";
+  }
+  if (status === "completed") {
+    return "Completed";
+  }
+  if (status === "marker") {
+    return "Markers";
+  }
+  return "To Do";
+}
+
+function getTaskCategoryTitle(task: ScrapedTask, statusTitle: string): string {
+  const category = task.category?.trim() || "Uncategorized";
+  return category.toLowerCase() === statusTitle.toLowerCase() ? "" : category;
+}
+
 function compareTaskPageOrder(a: ScrapedTask, b: ScrapedTask): number {
   return a.filePath.localeCompare(b.filePath) || a.line - b.line;
 }
@@ -1136,9 +1269,6 @@ function getEmptyScrapedText(title: string, totalCount: number): string {
 }
 
 function getTaskBadgeText(task: ScrapedTask): string {
-  if (task.completed) {
-    return "Completed";
-  }
   return task.kind === "checkbox" ? "Task" : task.marker ?? "Marker";
 }
 

@@ -4,6 +4,7 @@ import { ScrapedTask } from "./types";
 const CHECKBOX_TASK_RE = /^\s*[-*+]\s+\[(?<status>[^\]])\]\s+(?<text>.+)$/;
 const TODO_MARKER_RE = /^\s*(?:[-*+]\s+)?(?<marker>TODO|FIXME|TASK):\s*(?<text>.+)$/;
 const FENCE_RE = /^\s*(```|~~~)/;
+const HEADING_RE = /^\s{0,3}#{1,6}\s+(?<heading>.+?)\s*#*\s*$/;
 
 export class TaskScanner {
   constructor(private app: App) {}
@@ -32,7 +33,11 @@ export class TaskScanner {
         return;
       }
 
-      const task = parseTaskLine(file, line, index + 1);
+      if (state.consumeHeading(line)) {
+        return;
+      }
+
+      const task = parseTaskLine(file, line, index + 1, state.currentCategory);
       if (task) {
         tasks.push(task);
       }
@@ -42,22 +47,14 @@ export class TaskScanner {
   }
 
   async completeCheckbox(task: ScrapedTask): Promise<boolean> {
-    if (task.kind !== "checkbox") return false;
-    const file = this.app.vault.getAbstractFileByPath(task.filePath);
-    if (!(file instanceof TFile)) return false;
-
-    const content = await this.app.vault.read(file);
-    const lines = content.split(/\r?\n/);
-    const index = task.line - 1;
-    const line = lines[index];
-    if (!line || !CHECKBOX_TASK_RE.test(line)) return false;
-
-    lines[index] = line.replace(/\[[^\]]\]/, "[x]");
-    await this.app.vault.modify(file, lines.join(content.includes("\r\n") ? "\r\n" : "\n"));
-    return true;
+    return this.setCheckboxStatus(task, "completed");
   }
 
   async uncompleteCheckbox(task: ScrapedTask): Promise<boolean> {
+    return this.setCheckboxStatus(task, "todo");
+  }
+
+  async setCheckboxStatus(task: ScrapedTask, status: "todo" | "in-progress" | "completed"): Promise<boolean> {
     if (task.kind !== "checkbox") return false;
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) return false;
@@ -68,7 +65,7 @@ export class TaskScanner {
     const line = lines[index];
     if (!line || !CHECKBOX_TASK_RE.test(line)) return false;
 
-    lines[index] = line.replace(/\[[^\]]\]/, "[ ]");
+    lines[index] = line.replace(/\[[^\]]\]/, `[${getCheckboxStatusMarker(status)}]`);
     await this.app.vault.modify(file, lines.join(content.includes("\r\n") ? "\r\n" : "\n"));
     return true;
   }
@@ -118,6 +115,7 @@ export class TaskScanner {
 class MarkdownScanState {
   private inCodeFence = false;
   private inFrontmatter: boolean;
+  currentCategory = "Uncategorized";
 
   constructor(lines: string[]) {
     this.inFrontmatter = lines[0]?.trim() === "---";
@@ -142,21 +140,31 @@ class MarkdownScanState {
     this.inFrontmatter = isClosingBoundary ? false : this.inFrontmatter;
     return isClosingBoundary;
   }
+
+  consumeHeading(line: string): boolean {
+    const heading = line.match(HEADING_RE)?.groups?.heading?.trim();
+    if (!heading) {
+      return false;
+    }
+    this.currentCategory = heading;
+    return true;
+  }
 }
 
-function parseTaskLine(file: TFile, line: string, lineNumber: number): ScrapedTask | null {
-  return parseCheckboxTask(file, line, lineNumber) ?? parseMarkerTask(file, line, lineNumber);
+function parseTaskLine(file: TFile, line: string, lineNumber: number, category: string): ScrapedTask | null {
+  return parseCheckboxTask(file, line, lineNumber, category) ?? parseMarkerTask(file, line, lineNumber, category);
 }
 
 function isScannableTaskLine(line: string): boolean {
   return CHECKBOX_TASK_RE.test(line) || TODO_MARKER_RE.test(line);
 }
 
-function parseCheckboxTask(file: TFile, line: string, lineNumber: number): ScrapedTask | null {
+function parseCheckboxTask(file: TFile, line: string, lineNumber: number, category: string): ScrapedTask | null {
   const checkbox = line.match(CHECKBOX_TASK_RE);
   if (!checkbox?.groups) {
     return null;
   }
+  const status = getCheckboxStatus(checkbox.groups.status);
 
   return {
     id: `${file.path}:${lineNumber}:checkbox`,
@@ -164,11 +172,14 @@ function parseCheckboxTask(file: TFile, line: string, lineNumber: number): Scrap
     filePath: file.path,
     line: lineNumber,
     kind: "checkbox",
-    completed: checkbox.groups.status.trim().toLowerCase() === "x",
+    status,
+    completed: status === "completed",
+    category,
+    project: getProjectName(file),
   };
 }
 
-function parseMarkerTask(file: TFile, line: string, lineNumber: number): ScrapedTask | null {
+function parseMarkerTask(file: TFile, line: string, lineNumber: number, category: string): ScrapedTask | null {
   const marker = line.match(TODO_MARKER_RE);
   const markerText = marker?.groups?.text.trim();
   if (!marker?.groups || !markerText) {
@@ -182,7 +193,42 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number): Scraped
     filePath: file.path,
     line: lineNumber,
     kind: "marker",
+    status: "marker",
     completed: false,
+    category,
+    project: getProjectName(file),
     marker: markerName,
   };
+}
+
+function getCheckboxStatus(status: string): ScrapedTask["status"] {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "x") {
+    return "completed";
+  }
+  if (normalized === "/") {
+    return "in-progress";
+  }
+  return "todo";
+}
+
+function getCheckboxStatusMarker(status: "todo" | "in-progress" | "completed"): string {
+  if (status === "completed") {
+    return "x";
+  }
+  if (status === "in-progress") {
+    return "/";
+  }
+  return " ";
+}
+
+function getProjectName(file: TFile): string {
+  const parts = file.path.split("/");
+  if (parts[0]?.toLowerCase() === "projects" && parts[1]) {
+    return parts[1];
+  }
+  if (parts.length > 1) {
+    return parts[0];
+  }
+  return file.basename;
 }

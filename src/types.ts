@@ -20,7 +20,10 @@ export interface ScrapedTask {
   filePath: string;
   line: number;
   kind: "checkbox" | "marker";
+  status: "todo" | "in-progress" | "completed" | "marker";
   completed: boolean;
+  category: string;
+  project: string;
   marker?: string;
 }
 
@@ -40,6 +43,9 @@ export interface Settings {
   checkForUpdatesOnLaunch: boolean;
   autoRevealActiveFile: boolean;
   tasksIntegrationEnabled: boolean;
+  taskSectionHeadings: string[];
+  autoInsertTaskSections: boolean;
+  taskSectionAutoInsertFolders: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -51,4 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkForUpdatesOnLaunch: true,
   autoRevealActiveFile: true,
   tasksIntegrationEnabled: true,
+  taskSectionHeadings: ["In Progress", "To Do", "Completed"],
+  autoInsertTaskSections: false,
+  taskSectionAutoInsertFolders: [],
 };

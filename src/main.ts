@@ -9,6 +9,7 @@ import {
   TFile,
   TFolder,
   WorkspaceLeaf,
+  normalizePath,
 } from "obsidian";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
@@ -110,6 +111,14 @@ export default class QuickReminderPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "insert-task-sections",
+      name: "Insert task sections",
+      editorCallback: (editor: Editor) => {
+        insertTaskSections(editor, this.store.settings.taskSectionHeadings);
+      },
+    });
+
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         const sel = editor.getSelection().trim();
@@ -196,6 +205,14 @@ export default class QuickReminderPlugin extends Plugin {
       }),
     );
 
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (file instanceof TFile) {
+          this.maybeAutoInsertTaskSections(file);
+        }
+      }),
+    );
+
     this.app.workspace.onLayoutReady(() => {
       try {
         this.registerDomEvent(
@@ -214,6 +231,28 @@ export default class QuickReminderPlugin extends Plugin {
 
   onunload(): void {
     this.scheduler?.cancelAll();
+  }
+
+  private maybeAutoInsertTaskSections(file: TFile): void {
+    const settings = this.store.settings;
+    if (!settings.autoInsertTaskSections || file.extension !== "md") {
+      return;
+    }
+    if (!isPathInFolders(file.path, settings.taskSectionAutoInsertFolders)) {
+      return;
+    }
+
+    window.setTimeout(async () => {
+      try {
+        const existing = await this.app.vault.read(file);
+        if (existing.trim().length > 0 || hasTaskSection(existing)) {
+          return;
+        }
+        await this.app.vault.modify(file, buildTaskSectionBlock(settings.taskSectionHeadings));
+      } catch (error) {
+        console.error("Quick Reminder task section auto-insert failed", error);
+      }
+    }, 500);
   }
 
   async activateView(reveal = true, placement: "sidebar" | "tab" = "sidebar"): Promise<ReminderView | null> {
@@ -753,6 +792,43 @@ function openCommunityPlugins(app: App): void {
   settings?.openTabById?.("community-plugins");
 }
 
+function insertTaskSections(editor: Editor, headings: string[]): void {
+  const current = editor.getValue();
+  if (hasTaskSection(current)) {
+    new Notice("This note already has a Tasks section.");
+    return;
+  }
+
+  const block = buildTaskSectionBlock(headings);
+  const cursor = editor.getCursor();
+  const prefix = current.trim().length > 0 ? "\n\n" : "";
+  editor.replaceRange(`${prefix}${block}`, cursor);
+  new Notice("Task sections inserted.");
+}
+
+function buildTaskSectionBlock(headings: string[]): string {
+  const sections = normalizeTaskSectionHeadings(headings);
+  return ["## Tasks", "", ...sections.flatMap((heading) => [`### ${heading}`, ""])].join("\n").trimEnd() + "\n";
+}
+
+function normalizeTaskSectionHeadings(headings: string[]): string[] {
+  const clean = headings.map((heading) => heading.trim()).filter(Boolean);
+  return clean.length > 0 ? clean : ["In Progress", "To Do", "Completed"];
+}
+
+function hasTaskSection(content: string): boolean {
+  return /^\s{0,3}##\s+Tasks\s*#*\s*$/im.test(content);
+}
+
+function isPathInFolders(path: string, folders: string[]): boolean {
+  const normalizedPath = normalizePath(path);
+  const normalizedFolders = folders.map((folder) => normalizePath(folder.trim())).filter(Boolean);
+  if (normalizedFolders.length === 0) {
+    return false;
+  }
+  return normalizedFolders.some((folder) => normalizedPath === folder || normalizedPath.startsWith(`${folder}/`));
+}
+
 class QuickReminderSettingTab extends PluginSettingTab {
   constructor(
     app: App,
@@ -855,6 +931,62 @@ class QuickReminderSettingTab extends PluginSettingTab {
           .onClick(() => {
             openCommunityPlugins(this.app);
           }),
+      );
+
+    containerEl.createEl("h3", { text: "Task sections" });
+
+    new Setting(containerEl)
+      .setName("Task section headings")
+      .setDesc("One heading per line. Used by the insert command and optional new-note template.")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("In Progress\nTo Do\nCompleted")
+          .setValue(this.plugin.store.settings.taskSectionHeadings.join("\n"))
+          .onChange(async (v) => {
+            await this.plugin.store.updateSettings({
+              taskSectionHeadings: normalizeTaskSectionHeadings(v.split(/\r?\n/)),
+            });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-insert task sections in new notes")
+      .setDesc("Disabled by default. Only applies to empty new markdown notes inside the folders below.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.store.settings.autoInsertTaskSections).onChange(async (v) => {
+          await this.plugin.store.updateSettings({ autoInsertTaskSections: v });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-insert folders")
+      .setDesc("One vault-relative folder per line. Example: Projects or Daily.")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("Projects\nDaily")
+          .setValue(this.plugin.store.settings.taskSectionAutoInsertFolders.join("\n"))
+          .onChange(async (v) => {
+            await this.plugin.store.updateSettings({
+              taskSectionAutoInsertFolders: v
+                .split(/\r?\n/)
+                .map((folder) => normalizePath(folder.trim()))
+                .filter(Boolean),
+            });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Insert task sections")
+      .setDesc("Adds a Tasks section with your configured headings to the active note.")
+      .addButton((button) =>
+        button.setButtonText("Insert now").onClick(() => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          if (!view) {
+            new Notice("Open a markdown note first.");
+            return;
+          }
+          insertTaskSections(view.editor, this.plugin.store.settings.taskSectionHeadings);
+        }),
       );
 
     new Setting(containerEl)
