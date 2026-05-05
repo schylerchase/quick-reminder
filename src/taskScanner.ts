@@ -52,7 +52,7 @@ export class TaskScanner {
     const line = lines[index];
     if (!line || !CHECKBOX_TASK_RE.test(line)) return false;
 
-    lines[index] = line.replace(/\[\s\]/, "[x]");
+    lines[index] = line.replace(/\[[^\]]\]/, "[x]");
     await this.app.vault.modify(file, lines.join(content.includes("\r\n") ? "\r\n" : "\n"));
     return true;
   }

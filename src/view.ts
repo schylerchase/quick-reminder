@@ -921,10 +921,14 @@ function getTaskScopeLabel(taskScope: TaskScope, activeFilePath: string | null, 
 }
 
 function isInFolder(filePath: string, folderPath: string): boolean {
-  if (folderPath === "") {
+  if (folderPath === "" || folderPath === "/" || folderPath === ".") {
     return !filePath.includes("/");
   }
-  return filePath === folderPath || filePath.startsWith(`${folderPath}/`);
+  const normalizedFolder = folderPath.replace(/^\/+|\/+$/g, "");
+  if (!normalizedFolder) {
+    return !filePath.includes("/");
+  }
+  return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
 }
 
 function getEmptyScrapedText(title: string, totalCount: number): string {
