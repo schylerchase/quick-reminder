@@ -1,4 +1,4 @@
-import { EventRef, ItemView, MarkdownView, Notice, WorkspaceLeaf } from "obsidian";
+import { EventRef, ItemView, MarkdownView, Menu, Notice, WorkspaceLeaf } from "obsidian";
 import { Reminder, ScrapedTask } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
@@ -56,9 +56,20 @@ export class ReminderView extends ItemView {
   async onOpen(): Promise<void> {
     this.store.onChange(this.refreshHandler);
     this.captureActiveMarkdownContext();
-    this.fileOpenRef = this.app.workspace.on("file-open", () => {
+    this.fileOpenRef = this.app.workspace.on("file-open", (file) => {
+      const previousFolderPath = this.getScopedFolderPath();
       this.captureActiveMarkdownContext();
-      if (this.taskScope === "active" || (this.taskScope === "folder" && !this.selectedFolderPath)) {
+      if (
+        this.taskScope === "folder" &&
+        this.selectedFolderPath !== null &&
+        this.lastMarkdownPath !== null &&
+        !isInFolder(this.lastMarkdownPath, this.selectedFolderPath)
+      ) {
+        this.selectedFolderPath = null;
+      }
+      if (this.taskScope === "active" || previousFolderPath !== this.getScopedFolderPath()) {
+        void this.render();
+      } else if (file?.extension === "md" && this.taskScope === "folder" && this.selectedFolderPath === null) {
         void this.render();
       }
     });
@@ -416,6 +427,7 @@ export class ReminderView extends ItemView {
     };
 
     if (isIgnored) {
+      this.addScrapedRowContextMenu(row, task, isIgnored);
       actions.createEl("button", { text: "Unignore", cls: "qr-row-btn" }).onclick = async () => {
         await this.store.unignoreTask(task.id);
         await this.render();
@@ -446,6 +458,8 @@ export class ReminderView extends ItemView {
         await this.editWithTasksPlugin(task);
       };
     }
+
+    this.addScrapedRowContextMenu(row, task, isIgnored);
 
     actions.createEl("button", { text: "Ignore", cls: "qr-row-btn qr-ignore-btn" }).onclick = async () => {
       await this.store.ignoreTask(task.id);
@@ -501,8 +515,78 @@ export class ReminderView extends ItemView {
     return this.store.pending.some((reminder) => reminder.sourceTaskId === task.id);
   }
 
+  private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
+    row.oncontextmenu = (event) => {
+      event.preventDefault();
+      const menu = new Menu();
+
+      menu.addItem((item) => {
+        item
+          .setTitle("Show task")
+          .setIcon("file-search")
+          .onClick(() => {
+            void this.openTaskSource(task);
+          });
+      });
+
+      if (!task.completed && !this.hasPendingReminderForTask(task)) {
+        menu.addItem((item) => {
+          item
+            .setTitle("Create reminder")
+            .setIcon("calendar-plus")
+            .onClick(() => {
+              this.openCaptureWithText(task.text, task.id);
+            });
+        });
+      }
+
+      if (!isIgnored && task.kind === "checkbox") {
+        menu.addItem((item) => {
+          item
+            .setTitle("Edit task")
+            .setIcon("pencil")
+            .onClick(() => {
+              void this.editWithTasksPlugin(task);
+            });
+        });
+      }
+
+      if (isIgnored) {
+        menu.addItem((item) => {
+          item
+            .setTitle("Unignore task")
+            .setIcon("eye")
+            .onClick(() => {
+              void this.store.unignoreTask(task.id).then(() => this.render());
+            });
+        });
+      } else {
+        menu.addItem((item) => {
+          item
+            .setTitle("Ignore task")
+            .setIcon("eye-off")
+            .onClick(() => {
+              void this.store.ignoreTask(task.id).then(() => this.render());
+            });
+        });
+      }
+
+      menu.addItem((item) => {
+        item
+          .setTitle("Delete task")
+          .setIcon("trash")
+          .setWarning(true)
+          .onClick(() => {
+            void this.deleteTask(task);
+          });
+      });
+
+      menu.showAtMouseEvent(event);
+    };
+  }
+
   private openCaptureWithText(text: string, sourceTaskId: string | null = null): void {
-    new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId).open();
+    new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId, null, false).open();
   }
 
   private async openTaskSource(task: ScrapedTask): Promise<void> {

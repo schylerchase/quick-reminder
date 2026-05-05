@@ -21,6 +21,13 @@ export interface UpdateCheck {
   hasUpdate: boolean;
 }
 
+export class NoPublicReleaseError extends Error {
+  constructor() {
+    super("No public GitHub release found. Make sure the repository is public and a release is published.");
+    this.name = "NoPublicReleaseError";
+  }
+}
+
 export class PluginUpdater {
   constructor(
     private app: App,
@@ -82,7 +89,7 @@ export class PluginUpdater {
     });
 
     if (response.status === 404) {
-      throw new Error("No GitHub release found yet.");
+      throw new NoPublicReleaseError();
     }
     if (response.status >= 400) {
       throw new Error(`GitHub update check failed with HTTP ${response.status}.`);

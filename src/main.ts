@@ -16,7 +16,7 @@ import { QuickCaptureModal, ReminderListModal } from "./modal";
 import { DEFAULT_MIRROR_FILE_PATH, PluginData, Reminder } from "./types";
 import { parseReminder } from "./parser";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
-import { PluginUpdater } from "./updater";
+import { NoPublicReleaseError, PluginUpdater } from "./updater";
 import { TaskScanner } from "./taskScanner";
 
 export default class QuickReminderPlugin extends Plugin {
@@ -25,6 +25,7 @@ export default class QuickReminderPlugin extends Plugin {
   updater!: PluginUpdater;
   taskScanner!: TaskScanner;
   private selectedTaskFolderPath: string | null = null;
+  private updateCheckInFlight = false;
 
   async onload(): Promise<void> {
     this.store = new ReminderStore(
@@ -112,6 +113,14 @@ export default class QuickReminderPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         const sel = editor.getSelection().trim();
+        menu.addItem((item) => {
+          item
+            .setTitle(sel ? "Create reminder from selection" : "Create reminder")
+            .setIcon("calendar-plus")
+            .onClick(() => {
+              new QuickCaptureModal(this.app, this.store, this.scheduler, this.getEditorTaskSeed(editor), null, null, false).open();
+            });
+        });
         if (this.isTasksIntegrationAvailable()) {
           menu.addItem((item) => {
             item
@@ -124,22 +133,13 @@ export default class QuickReminderPlugin extends Plugin {
         } else {
           menu.addItem((item) => {
             item
-              .setTitle("Add reminder")
-              .setIcon("calendar-plus")
+              .setTitle("Add task reminder")
+              .setIcon("list-plus")
               .onClick(() => {
-                new QuickCaptureModal(this.app, this.store, this.scheduler, this.getEditorTaskSeed(editor)).open();
+                new QuickCaptureModal(this.app, this.store, this.scheduler, this.getEditorTaskSeed(editor), null, null, false).open();
               });
           });
         }
-        if (!sel) return;
-        menu.addItem((item) => {
-          item
-            .setTitle("Create reminder from selection")
-            .setIcon("calendar-plus")
-            .onClick(() => {
-              void this.convertSelectionToReminder(editor, view as MarkdownView);
-            });
-        });
       }),
     );
 
@@ -171,15 +171,28 @@ export default class QuickReminderPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
-        if (!(file instanceof TFolder)) return;
-        menu.addItem((item) => {
-          item
-            .setTitle("Show folder tasks in Quick Reminder")
-            .setIcon("list-checks")
-            .onClick(() => {
-              void this.showTasksForFolder(file.path);
-            });
-        });
+        if (file instanceof TFile && file.extension === "md") {
+          menu.addItem((item) => {
+            item
+              .setTitle("Show file tasks in Quick Reminder")
+              .setIcon("list-checks")
+              .onClick(() => {
+                void this.showTasksForFile(file);
+              });
+          });
+          return;
+        }
+
+        if (file instanceof TFolder) {
+          menu.addItem((item) => {
+            item
+              .setTitle("Show folder tasks in Quick Reminder")
+              .setIcon("list-checks")
+              .onClick(() => {
+                void this.showTasksForFolder(file.path);
+              });
+          });
+        }
       }),
     );
 
@@ -242,6 +255,12 @@ export default class QuickReminderPlugin extends Plugin {
     view?.showFolder(folderPath);
     window.setTimeout(() => this.highlightSelectedTaskFolder(), 0);
     window.setTimeout(() => this.highlightSelectedTaskFolder(), 100);
+  }
+
+  async showTasksForFile(file: TFile): Promise<void> {
+    this.clearSelectedTaskFolderHighlight();
+    const view = await this.activateView(true, this.getCurrentManagerPlacement());
+    view?.showActiveFile(file.path, file.parent?.path ?? "");
   }
 
   private getCurrentManagerPlacement(): "sidebar" | "tab" {
@@ -359,6 +378,11 @@ export default class QuickReminderPlugin extends Plugin {
   }
 
   async installLatestRelease(): Promise<void> {
+    if (this.updateCheckInFlight) {
+      new Notice("Quick Reminder is already checking for updates.");
+      return;
+    }
+    this.updateCheckInFlight = true;
     new Notice("Checking Quick Reminder releases...");
     try {
       const result = await this.updater.installLatest();
@@ -373,12 +397,15 @@ export default class QuickReminderPlugin extends Plugin {
       );
     } catch (error) {
       console.error("Quick Reminder update failed", error);
-      new Notice(`Quick Reminder update failed: ${getErrorMessage(error)}`, 10_000);
+      new Notice(getUpdateErrorMessage(error), 10_000);
+    } finally {
+      this.updateCheckInFlight = false;
     }
   }
 
   private async notifyIfUpdateAvailable(): Promise<void> {
-    if (!this.store.settings.checkForUpdatesOnLaunch) return;
+    if (!this.store.settings.checkForUpdatesOnLaunch || this.updateCheckInFlight) return;
+    this.updateCheckInFlight = true;
     try {
       const result = await this.updater.check();
       if (!result.hasUpdate) return;
@@ -388,6 +415,8 @@ export default class QuickReminderPlugin extends Plugin {
       );
     } catch (error) {
       console.warn("Quick Reminder update check failed", error);
+    } finally {
+      this.updateCheckInFlight = false;
     }
   }
 
@@ -447,7 +476,7 @@ export default class QuickReminderPlugin extends Plugin {
       const line = toTaskLine(toReminderMarkdown(rawInput, reminder.dueAt));
       this.insertTaskLine(editor, line);
       await this.activateView(false);
-    }).open();
+    }, false).open();
   }
 
   isTasksIntegrationAvailable(): boolean {
@@ -645,6 +674,13 @@ async function revealFileInExplorer(app: App, file: unknown): Promise<boolean> {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getUpdateErrorMessage(error: unknown): string {
+  if (error instanceof NoPublicReleaseError) {
+    return "No public Quick Reminder release found. Publish a GitHub release and make the repo public for in-app updates.";
+  }
+  return `Quick Reminder update failed: ${getErrorMessage(error)}`;
 }
 
 function cleanMarkdownTaskLine(value: string): string {

@@ -17,6 +17,7 @@ export class QuickCaptureModal extends Modal {
     private initialInput = "",
     private sourceTaskId: string | null = null,
     private onSaveReminder: ((reminder: Reminder, rawInput: string) => void | Promise<void>) | null = null,
+    private selectInitialInput = true,
   ) {
     super(app);
   }
@@ -45,7 +46,11 @@ export class QuickCaptureModal extends Modal {
     this.setInput(this.initialInput);
     this.inputEl.focus();
     if (this.initialInput) {
-      this.inputEl.select();
+      if (this.selectInitialInput) {
+        this.inputEl.select();
+      } else {
+        this.inputEl.setSelectionRange(this.initialInput.length, this.initialInput.length);
+      }
     }
 
     this.previewEl = contentEl.createDiv({ cls: "qr-preview" });
