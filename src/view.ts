@@ -488,21 +488,27 @@ export class ReminderView extends ItemView {
     }
 
     const parsed = parseReminder(task.text);
+    const dueAt = parsed.dueAt;
+    if (!hasFutureDueAt(dueAt)) {
+      const noTimeBtn = actions.createEl("button", {
+        text: "No completion time set",
+        cls: "qr-row-btn",
+      });
+      noTimeBtn.disabled = true;
+      noTimeBtn.setAttr("aria-label", "Task exists, but no future reminder time was detected");
+      return;
+    }
+
     const remindBtn = actions.createEl("button", {
-      text: parsed.dueAt && parsed.dueAt > Date.now() ? "Add reminder" : "Capture",
+      text: "Add reminder",
       cls: "qr-row-btn",
     });
     remindBtn.onclick = async () => {
-      if (!hasFutureDueAt(parsed.dueAt)) {
-        this.openCaptureWithText(task.text, task.id);
-        return;
-      }
-
       const reminder: Reminder = {
         id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
         text: parsed.text,
         rawInput: task.text,
-        dueAt: parsed.dueAt,
+        dueAt,
         createdAt: Date.now(),
         notified: false,
         sourceTaskId: task.id,
