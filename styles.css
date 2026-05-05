@@ -295,6 +295,12 @@
 .qr-view-row:hover { border-color: var(--background-modifier-border); }
 .qr-scraped-row {
   border-left: 2px solid var(--interactive-accent);
+  flex-direction: column;
+  gap: 0.45em;
+}
+.qr-scraped-row .qr-view-row-body,
+.qr-scraped-row .qr-view-row-actions {
+  width: 100%;
 }
 .qr-view-dashboard .qr-view-row {
   display: grid;
@@ -307,6 +313,7 @@
 }
 .qr-view-dashboard .qr-view-row-actions {
   flex-wrap: nowrap;
+  width: auto;
 }
 .qr-view-row-done .qr-view-row-text {
   text-decoration: line-through;
@@ -317,7 +324,8 @@
 }
 .qr-view-row-text {
   font-size: 0.92em;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .qr-task-badges {
   display: flex;
@@ -347,8 +355,11 @@
   flex-wrap: wrap;
   gap: 0.25em;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-shrink: 0;
+}
+.qr-view-dashboard .qr-view-row-actions {
+  justify-content: flex-end;
 }
 .qr-row-btn {
   font-size: 0.75em;
