@@ -224,13 +224,13 @@
 }
 .qr-task-toolbar {
   display: grid;
-  grid-template-columns: minmax(8em, 1fr) minmax(0, 0.72fr) minmax(0, 0.72fr);
+  grid-template-columns: minmax(8em, 1fr) minmax(0, 0.72fr) minmax(0, 0.72fr) minmax(0, 0.72fr);
   gap: 0.4em;
   align-items: center;
   margin-bottom: 1em;
 }
 .qr-view-dashboard .qr-task-toolbar {
-  grid-template-columns: minmax(16em, 1fr) minmax(10em, 0.32fr) minmax(10em, 0.32fr) auto;
+  grid-template-columns: minmax(16em, 1fr) minmax(9em, 0.26fr) minmax(9em, 0.26fr) minmax(9em, 0.26fr) auto;
 }
 .qr-view-dashboard .qr-task-filter-count {
   grid-column: auto;

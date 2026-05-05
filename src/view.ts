@@ -1,4 +1,4 @@
-import { App, EventRef, ItemView, MarkdownView, Menu, Modal, Notice, WorkspaceLeaf } from "obsidian";
+import { App, EventRef, ItemView, MarkdownView, Menu, Modal, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { Reminder, ScrapedTask } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
@@ -8,12 +8,14 @@ import { TaskScanner } from "./taskScanner";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
 type TaskScope = "active" | "folder" | "vault";
+type TaskSort = "page" | "priority";
 type ReminderViewState = {
   taskScope: TaskScope;
   selectedFolderPath: string | null;
   lastMarkdownPath: string | null;
   lastFolderPath: string | null;
   sourceFilter: "all" | "checkbox" | "marker";
+  taskSort: TaskSort;
   taskSearch: string;
 };
 
@@ -32,6 +34,7 @@ export class ReminderView extends ItemView {
   private lastMarkdownPath: string | null = null;
   private lastFolderPath: string | null = null;
   private sourceFilter: "all" | "checkbox" | "marker" = "all";
+  private taskSort: TaskSort = "page";
   private fileOpenRef: EventRef | null = null;
 
   constructor(
@@ -110,10 +113,10 @@ export class ReminderView extends ItemView {
     const ignoredTaskNotes = this.store.ignoredTaskNotes;
     const unignoredScraped = scraped.filter((task) => !ignoredTaskIds.has(task.id));
     const filteredScraped = this.getFilteredScrapedTasks(unignoredScraped);
-    const activeScraped = filteredScraped.filter((task) => !task.completed);
-    const completedScraped = filteredScraped.filter((task) => task.completed);
+    const activeScraped = this.sortScrapedTasks(filteredScraped.filter((task) => !task.completed));
+    const completedScraped = this.sortScrapedTasks(filteredScraped.filter((task) => task.completed));
     const scopedIgnoredScraped = scraped.filter((task) => ignoredTaskIds.has(task.id));
-    const ignoredScraped = this.getFilteredScrapedTasks(scopedIgnoredScraped);
+    const ignoredScraped = this.sortScrapedTasks(this.getFilteredScrapedTasks(scopedIgnoredScraped));
 
     const header = container.createDiv({ cls: "qr-view-header" });
     const title = header.createDiv({ cls: "qr-view-title" });
@@ -364,6 +367,15 @@ export class ReminderView extends ItemView {
     sourceSelect.value = this.sourceFilter;
     sourceSelect.onchange = () => {
       this.sourceFilter = sourceSelect.value as "all" | "checkbox" | "marker";
+      void this.render();
+    };
+
+    const sortSelect = toolbar.createEl("select", { cls: "qr-task-select" });
+    sortSelect.createEl("option", { text: "Page order", value: "page" });
+    sortSelect.createEl("option", { text: "Priority", value: "priority" });
+    sortSelect.value = this.taskSort;
+    sortSelect.onchange = () => {
+      this.taskSort = sortSelect.value as TaskSort;
       void this.render();
     };
 
@@ -647,7 +659,36 @@ export class ReminderView extends ItemView {
     if (view) {
       view.editor.setCursor({ line: task.line - 1, ch: 0 });
       view.editor.focus();
+      this.closeDuplicateMainFileLeaves(view.file, view.leaf, [0, 100, 300]);
     }
+  }
+
+  private closeDuplicateMainFileLeaves(file: TFile | null, keepLeaf: WorkspaceLeaf, delays = [0]): void {
+    if (!file) return;
+    for (const delay of delays) {
+      window.setTimeout(() => {
+        this.closeDuplicateMainFileLeavesNow(file, keepLeaf);
+      }, delay);
+    }
+  }
+
+  private closeDuplicateMainFileLeavesNow(file: TFile, keepLeaf: WorkspaceLeaf): void {
+    const duplicates: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf === keepLeaf) return;
+      if (!this.isMainWorkspaceLeaf(leaf)) return;
+      if (!(leaf.view instanceof MarkdownView)) return;
+      if (leaf.view.file?.path !== file.path) return;
+      duplicates.push(leaf);
+    });
+
+    for (const leaf of duplicates) {
+      leaf.detach();
+    }
+  }
+
+  private isMainWorkspaceLeaf(leaf: WorkspaceLeaf): boolean {
+    return !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split");
   }
 
   private async editWithTasksPlugin(task: ScrapedTask): Promise<void> {
@@ -706,6 +747,16 @@ export class ReminderView extends ItemView {
         .join(" ")
         .toLowerCase()
         .includes(query);
+    });
+  }
+
+  private sortScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
+    return [...tasks].sort((a, b) => {
+      if (this.taskSort === "priority") {
+        const priorityDiff = getTaskPriorityRank(a.text) - getTaskPriorityRank(b.text);
+        if (priorityDiff !== 0) return priorityDiff;
+      }
+      return compareTaskPageOrder(a, b);
     });
   }
 
@@ -812,6 +863,7 @@ export class ReminderView extends ItemView {
       lastMarkdownPath: this.lastMarkdownPath,
       lastFolderPath: this.lastFolderPath,
       sourceFilter: this.sourceFilter,
+      taskSort: this.taskSort,
       taskSearch: this.taskSearch,
     };
   }
@@ -822,6 +874,7 @@ export class ReminderView extends ItemView {
     this.lastMarkdownPath = state.lastMarkdownPath;
     this.lastFolderPath = state.lastFolderPath;
     this.sourceFilter = state.sourceFilter;
+    this.taskSort = state.taskSort ?? "page";
     this.taskSearch = state.taskSearch;
   }
 
@@ -1035,6 +1088,34 @@ function isInFolder(filePath: string, folderPath: string): boolean {
     return !filePath.includes("/");
   }
   return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
+}
+
+function compareTaskPageOrder(a: ScrapedTask, b: ScrapedTask): number {
+  return a.filePath.localeCompare(b.filePath) || a.line - b.line;
+}
+
+function getTaskPriorityRank(text: string): number {
+  const normalized = text.toLowerCase();
+  if (hasPriorityEmoji(text, "\u{1F53A}") || /\b(?:priority|prio)\s*[:=]\s*(?:highest|urgent|critical)\b/.test(normalized) || /#(?:priority|prio)\/(?:highest|urgent|critical)\b/.test(normalized) || /\bp0\b/.test(normalized) || /!!!/.test(text)) {
+    return 0;
+  }
+  if (hasPriorityEmoji(text, "\u{23EB}") || /\b(?:priority|prio)\s*[:=]\s*high\b/.test(normalized) || /#(?:priority|prio)\/high\b/.test(normalized) || /\bp1\b/.test(normalized) || /!!/.test(text)) {
+    return 1;
+  }
+  if (hasPriorityEmoji(text, "\u{1F53C}") || /\b(?:priority|prio)\s*[:=]\s*medium\b/.test(normalized) || /#(?:priority|prio)\/medium\b/.test(normalized) || /\bp2\b/.test(normalized)) {
+    return 2;
+  }
+  if (hasPriorityEmoji(text, "\u{1F53D}") || /\b(?:priority|prio)\s*[:=]\s*low\b/.test(normalized) || /#(?:priority|prio)\/low\b/.test(normalized) || /\bp3\b/.test(normalized)) {
+    return 3;
+  }
+  if (hasPriorityEmoji(text, "\u{23EC}") || /\b(?:priority|prio)\s*[:=]\s*lowest\b/.test(normalized) || /#(?:priority|prio)\/lowest\b/.test(normalized) || /\bp4\b/.test(normalized)) {
+    return 4;
+  }
+  return 5;
+}
+
+function hasPriorityEmoji(text: string, emoji: string): boolean {
+  return text.includes(emoji);
 }
 
 function getEmptyScrapedText(title: string, totalCount: number): string {
