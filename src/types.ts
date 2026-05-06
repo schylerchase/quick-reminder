@@ -27,6 +27,20 @@ export interface ScrapedTask {
   marker?: string;
 }
 
+export type TaskDashboardScope = "active" | "folder" | "vault";
+export type TaskDashboardSort = "page" | "priority";
+export type TaskDashboardSourceFilter = "all" | "checkbox" | "marker";
+
+export interface TaskDashboardState {
+  scope: TaskDashboardScope;
+  selectedFolderPath: string | null;
+  lastMarkdownPath: string | null;
+  lastFolderPath: string | null;
+  sourceFilter: TaskDashboardSourceFilter;
+  sort: TaskDashboardSort;
+  search: string;
+}
+
 export interface PluginData {
   reminders: Reminder[];
   ignoredTaskIds: string[];
@@ -46,6 +60,7 @@ export interface Settings {
   taskSectionHeadings: string[];
   autoInsertTaskSections: boolean;
   taskSectionAutoInsertFolders: string[];
+  taskDashboardState: TaskDashboardState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -60,4 +75,13 @@ export const DEFAULT_SETTINGS: Settings = {
   taskSectionHeadings: ["In Progress", "To Do", "Completed"],
   autoInsertTaskSections: false,
   taskSectionAutoInsertFolders: [],
+  taskDashboardState: {
+    scope: "vault",
+    selectedFolderPath: null,
+    lastMarkdownPath: null,
+    lastFolderPath: null,
+    sourceFilter: "all",
+    sort: "page",
+    search: "",
+  },
 };

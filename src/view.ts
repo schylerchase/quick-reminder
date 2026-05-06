@@ -11,7 +11,14 @@ import {
   WorkspaceLeaf,
   normalizePath,
 } from "obsidian";
-import { Reminder, ScrapedTask } from "./types";
+import {
+  Reminder,
+  ScrapedTask,
+  TaskDashboardScope,
+  TaskDashboardSort,
+  TaskDashboardSourceFilter,
+  TaskDashboardState,
+} from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
 import { QuickCaptureModal } from "./modal";
@@ -19,15 +26,13 @@ import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
-type TaskScope = "active" | "folder" | "vault";
-type TaskSort = "page" | "priority";
 type ReminderViewState = {
-  taskScope: TaskScope;
+  taskScope: TaskDashboardScope;
   selectedFolderPath: string | null;
   lastMarkdownPath: string | null;
   lastFolderPath: string | null;
-  sourceFilter: "all" | "checkbox" | "marker";
-  taskSort: TaskSort;
+  sourceFilter: TaskDashboardSourceFilter;
+  taskSort: TaskDashboardSort;
   taskSearch: string;
 };
 
@@ -41,14 +46,16 @@ export class ReminderView extends ItemView {
   private hasScannedTasks = false;
   private isScanningTasks = false;
   private taskSearch = "";
-  private taskScope: TaskScope = "folder";
+  private taskScope: TaskDashboardScope = "vault";
   private selectedFolderPath: string | null = null;
   private lastMarkdownPath: string | null = null;
   private lastFolderPath: string | null = null;
-  private sourceFilter: "all" | "checkbox" | "marker" = "all";
-  private taskSort: TaskSort = "page";
+  private sourceFilter: TaskDashboardSourceFilter = "all";
+  private taskSort: TaskDashboardSort = "page";
   private fileOpenRef: EventRef | null = null;
   private scanDebounceHandle: number | null = null;
+  private highlightedTaskId: string | null = null;
+  private highlightTimeoutHandle: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -73,10 +80,13 @@ export class ReminderView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.store.onChange(this.refreshHandler);
+    this.applyDashboardState(this.store.settings.taskDashboardState);
     this.captureActiveMarkdownContext();
+    this.ensureUsableDefaultScope();
     this.fileOpenRef = this.app.workspace.on("file-open", (file) => {
       const previousFolderPath = this.getScopedFolderPath();
       this.captureActiveMarkdownContext();
+      void this.persistDashboardState();
       if (
         this.taskScope === "folder" &&
         this.selectedFolderPath !== null &&
@@ -113,6 +123,10 @@ export class ReminderView extends ItemView {
     if (this.scanDebounceHandle !== null) {
       window.clearTimeout(this.scanDebounceHandle);
       this.scanDebounceHandle = null;
+    }
+    if (this.highlightTimeoutHandle !== null) {
+      window.clearTimeout(this.highlightTimeoutHandle);
+      this.highlightTimeoutHandle = null;
     }
   }
 
@@ -167,15 +181,15 @@ export class ReminderView extends ItemView {
         await this.openAsSidebar();
       };
     } else {
-      const fullBtn = headerActions.createEl("button", { text: "Full", cls: "qr-view-secondary-btn" });
-      fullBtn.onclick = async () => {
-        await this.openAsMainTab();
+      const dashboardBtn = headerActions.createEl("button", { text: "Dashboard", cls: "qr-view-secondary-btn" });
+      dashboardBtn.onclick = async () => {
+        await this.openAsDashboard();
       };
     }
 
     const addBtn = headerActions.createEl("button", { text: "New", cls: "qr-view-add-btn" });
     addBtn.onclick = () => {
-      new QuickCaptureModal(this.app, this.store, this.scheduler).open();
+      this.openNewItemModal();
     };
 
     this.renderStats(
@@ -400,6 +414,7 @@ export class ReminderView extends ItemView {
     search.value = this.taskSearch;
     search.oninput = () => {
       this.taskSearch = search.value;
+      void this.persistDashboardState();
       void this.render();
     };
 
@@ -409,8 +424,9 @@ export class ReminderView extends ItemView {
     scopeSelect.createEl("option", { text: "Whole vault", value: "vault" });
     scopeSelect.value = this.taskScope;
     scopeSelect.onchange = () => {
-      this.taskScope = scopeSelect.value as TaskScope;
+      this.taskScope = scopeSelect.value as TaskDashboardScope;
       this.selectedFolderPath = null;
+      void this.persistDashboardState();
       void this.render(true);
     };
 
@@ -420,7 +436,8 @@ export class ReminderView extends ItemView {
     sourceSelect.createEl("option", { text: "Markers", value: "marker" });
     sourceSelect.value = this.sourceFilter;
     sourceSelect.onchange = () => {
-      this.sourceFilter = sourceSelect.value as "all" | "checkbox" | "marker";
+      this.sourceFilter = sourceSelect.value as TaskDashboardSourceFilter;
+      void this.persistDashboardState();
       void this.render();
     };
 
@@ -429,7 +446,8 @@ export class ReminderView extends ItemView {
     sortSelect.createEl("option", { text: "Priority", value: "priority" });
     sortSelect.value = this.taskSort;
     sortSelect.onchange = () => {
-      this.taskSort = sortSelect.value as TaskSort;
+      this.taskSort = sortSelect.value as TaskDashboardSort;
+      void this.persistDashboardState();
       void this.render();
     };
 
@@ -461,17 +479,18 @@ export class ReminderView extends ItemView {
     }
 
     const visibleTasks = tasks.slice(0, 150);
-    for (const group of groupTasksForDisplay(visibleTasks)) {
-      if (group.title !== title) {
-        section.createDiv({ text: group.title, cls: "qr-task-group-title" });
-      }
+    for (const note of groupTasksForDisplay(visibleTasks)) {
+      section.createDiv({ text: note.filePath, cls: "qr-task-note-title" });
 
-      for (const category of group.categories) {
-        if (category.title && category.title !== group.title) {
-          section.createDiv({ text: category.title, cls: "qr-task-category-title" });
-        }
-        for (const task of category.tasks) {
-          this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "");
+      for (const status of note.statuses) {
+        section.createDiv({ text: status.title, cls: "qr-task-group-title" });
+        for (const category of status.categories) {
+          if (category.title) {
+            section.createDiv({ text: category.title, cls: "qr-task-category-title" });
+          }
+          for (const task of category.tasks) {
+            this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", false);
+          }
         }
       }
     }
@@ -516,10 +535,17 @@ export class ReminderView extends ItemView {
     return this.collapsedSections.has(title);
   }
 
-  private renderScrapedRow(parent: HTMLElement, task: ScrapedTask, isIgnored = false, ignoredNote = ""): void {
+  private renderScrapedRow(
+    parent: HTMLElement,
+    task: ScrapedTask,
+    isIgnored = false,
+    ignoredNote = "",
+    showFilePath = true,
+  ): void {
     const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
+    row.toggleClass("qr-view-row-highlight", task.id === this.highlightedTaskId);
     const body = row.createDiv({ cls: "qr-view-row-body" });
     const badges = body.createDiv({ cls: "qr-task-badges" });
     badges.createSpan({ text: getTaskBadgeText(task), cls: "qr-task-badge" });
@@ -529,7 +555,7 @@ export class ReminderView extends ItemView {
     body.createDiv({ text: task.text, cls: "qr-view-row-text" });
     const source = task.kind === "marker" && task.marker ? `${task.marker} - ` : "";
     body.createDiv({
-      text: `${source}${task.filePath}:${task.line}`,
+      text: showFilePath ? `${source}${task.filePath}:${task.line}` : `${source}Line ${task.line}`,
       cls: "qr-view-row-when",
     });
     if (isIgnored && ignoredNote) {
@@ -718,6 +744,77 @@ export class ReminderView extends ItemView {
     new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId, null, false).open();
   }
 
+  private openNewItemModal(): void {
+    new NewItemModal(
+      this.app,
+      () => this.openNewTaskModal(false),
+      () => this.openNewTaskModal(true),
+    ).open();
+  }
+
+  private openNewTaskModal(withReminder: boolean): void {
+    const filePath = this.getTaskCreationFilePath();
+    if (!filePath) {
+      if (withReminder) {
+        new QuickCaptureModal(this.app, this.store, this.scheduler).open();
+      } else {
+        new Notice("Select Current file or open a markdown note before creating a task.");
+      }
+      return;
+    }
+    new NewTaskModal(this.app, withReminder, async (rawInput) => {
+      await this.createTaskFromInput(filePath, rawInput, withReminder);
+    }).open();
+  }
+
+  private getTaskCreationFilePath(): string | null {
+    if (this.taskScope === "active" && this.lastMarkdownPath) {
+      return this.lastMarkdownPath;
+    }
+    if (this.lastMarkdownPath) {
+      return this.lastMarkdownPath;
+    }
+    const file = this.app.workspace.getActiveFile();
+    return file instanceof TFile && file.extension === "md" ? file.path : null;
+  }
+
+  private async createTaskFromInput(filePath: string, rawInput: string, withReminder: boolean): Promise<void> {
+    const parsed = parseReminder(rawInput);
+    const taskText = withReminder ? parsed.text : rawInput.trim();
+    if (!taskText) {
+      new Notice("Task needs text.");
+      return;
+    }
+    if (withReminder && (!parsed.dueAt || parsed.dueAt <= Date.now())) {
+      new Notice("Reminder needs a future time, like 'tomorrow 3pm'.");
+      return;
+    }
+
+    const task = await this.taskScanner.appendTask(filePath, taskText);
+    if (!task) {
+      new Notice("Could not add task to the source note.");
+      return;
+    }
+
+    if (withReminder && parsed.dueAt) {
+      const reminder: Reminder = {
+        id: genReminderId(),
+        text: taskText,
+        rawInput,
+        dueAt: parsed.dueAt,
+        createdAt: Date.now(),
+        notified: false,
+        sourceTaskId: task.id,
+      };
+      await this.store.add(reminder);
+      this.scheduler.schedule(reminder);
+    }
+
+    await this.refreshScrapedTasks();
+    await this.render();
+    new Notice(withReminder ? "Task and reminder created" : "Task created");
+  }
+
   private async updateTaskStatus(
     task: ScrapedTask,
     status: "todo" | "in-progress" | "completed",
@@ -729,8 +826,21 @@ export class ReminderView extends ItemView {
       return;
     }
     await this.refreshScrapedTasks();
+    this.flashTask(task.id);
     await this.render();
     new Notice(successMessage);
+  }
+
+  private flashTask(taskId: string): void {
+    this.highlightedTaskId = taskId;
+    if (this.highlightTimeoutHandle !== null) {
+      window.clearTimeout(this.highlightTimeoutHandle);
+    }
+    this.highlightTimeoutHandle = window.setTimeout(() => {
+      this.highlightedTaskId = null;
+      this.highlightTimeoutHandle = null;
+      void this.render();
+    }, 1600);
   }
 
   private async openTaskSource(task: ScrapedTask): Promise<void> {
@@ -844,6 +954,7 @@ export class ReminderView extends ItemView {
     this.taskScope = "folder";
     this.selectedFolderPath = folderPath;
     this.lastFolderPath = folderPath;
+    void this.persistDashboardState();
     void this.render(true);
   }
 
@@ -852,14 +963,16 @@ export class ReminderView extends ItemView {
     this.selectedFolderPath = null;
     this.lastMarkdownPath = filePath;
     this.lastFolderPath = folderPath;
+    void this.persistDashboardState();
     void this.render(true);
   }
 
-  setScope(scope: TaskScope): void {
+  setScope(scope: TaskDashboardScope): void {
     this.taskScope = scope;
     if (scope !== "folder") {
       this.selectedFolderPath = null;
     }
+    void this.persistDashboardState();
     void this.render();
   }
 
@@ -897,10 +1010,44 @@ export class ReminderView extends ItemView {
     }
   }
 
-  private async openAsMainTab(): Promise<void> {
-    const leaf = this.getExistingMainLeaf() ?? this.getPreferredMainLeaf() ?? this.app.workspace.getLeaf("tab");
-    const currentFile = leaf.view instanceof MarkdownView ? leaf.view.file : null;
-    const state = this.getStateForMainOpen(currentFile);
+  private async openAsDashboard(): Promise<void> {
+    const file = this.getDashboardSourceFile();
+    if (!file) {
+      await this.openVaultDashboard();
+      return;
+    }
+
+    const noteLeaf = this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf();
+    if (!noteLeaf) {
+      new Notice("Quick Reminder could not find a note pane.");
+      return;
+    }
+
+    await noteLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    await noteLeaf.loadIfDeferred();
+    this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
+    const noteTab = this.app.workspace.getLeaf("tab");
+    await noteTab.openFile(file, { active: false });
+
+    const managerLeaf = noteLeaf;
+    await managerLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    await managerLeaf.loadIfDeferred();
+    if (managerLeaf.view instanceof ReminderView) {
+      managerLeaf.view.showActiveFile(file.path, file.parent?.path ?? "");
+    }
+    this.app.workspace.rightSplit.collapse();
+    await this.app.workspace.revealLeaf(managerLeaf);
+    this.app.workspace.setActiveLeaf(managerLeaf, { focus: true });
+    this.closeMainManagerLeaves(managerLeaf);
+  }
+
+  private async openVaultDashboard(): Promise<void> {
+    const leaf = this.getExistingMainLeaf() ?? this.app.workspace.getLeaf("split", "vertical");
+    const state = {
+      ...this.getViewState(),
+      taskScope: "vault" as TaskDashboardScope,
+      selectedFolderPath: null,
+    };
     if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
       await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
     }
@@ -911,6 +1058,26 @@ export class ReminderView extends ItemView {
       void leaf.view.render(true);
     }
     this.closeMainManagerLeaves(leaf);
+  }
+
+  private getDashboardSourceFile(): TFile | null {
+    const activeLeaf = this.app.workspace.activeLeaf;
+    if (activeLeaf && this.getMainMarkdownLeaf(activeLeaf)) {
+      const file = activeLeaf.view instanceof MarkdownView ? activeLeaf.view.file : null;
+      if (file instanceof TFile && file.extension === "md") {
+        return file;
+      }
+    }
+
+    if (this.lastMarkdownPath) {
+      const file = this.app.vault.getAbstractFileByPath(this.lastMarkdownPath);
+      if (file instanceof TFile && file.extension === "md") {
+        return file;
+      }
+    }
+
+    const file = this.app.workspace.getActiveFile();
+    return file instanceof TFile && file.extension === "md" ? file : null;
   }
 
   private async openAsSidebar(): Promise<void> {
@@ -956,26 +1123,40 @@ export class ReminderView extends ItemView {
     this.sourceFilter = state.sourceFilter;
     this.taskSort = state.taskSort ?? "page";
     this.taskSearch = state.taskSearch;
+    void this.persistDashboardState();
   }
 
-  private getStateForMainOpen(currentFile: MarkdownView["file"]): ReminderViewState {
-    const state = this.getViewState();
-    if (currentFile) {
-      return {
-        ...state,
-        taskScope: "active",
-        selectedFolderPath: null,
-        lastMarkdownPath: currentFile.path,
-        lastFolderPath: currentFile.parent?.path ?? "",
-      };
+  private applyDashboardState(state: TaskDashboardState): void {
+    this.taskScope = state.scope ?? "vault";
+    this.selectedFolderPath = state.selectedFolderPath ?? null;
+    this.lastMarkdownPath = state.lastMarkdownPath ?? null;
+    this.lastFolderPath = state.lastFolderPath ?? null;
+    this.sourceFilter = state.sourceFilter ?? "all";
+    this.taskSort = state.sort ?? "page";
+    this.taskSearch = state.search ?? "";
+  }
+
+  private ensureUsableDefaultScope(): void {
+    if (this.taskScope === "active" && !this.lastMarkdownPath) {
+      this.taskScope = "vault";
     }
-    if (state.selectedFolderPath !== null) {
-      return {
-        ...state,
-        taskScope: "folder",
-      };
+    if (this.taskScope === "folder" && this.getScopedFolderPath() === null) {
+      this.taskScope = "vault";
     }
-    return state;
+  }
+
+  private async persistDashboardState(): Promise<void> {
+    await this.store.updateSettings({
+      taskDashboardState: {
+        scope: this.taskScope,
+        selectedFolderPath: this.selectedFolderPath,
+        lastMarkdownPath: this.lastMarkdownPath,
+        lastFolderPath: this.lastFolderPath,
+        sourceFilter: this.sourceFilter,
+        sort: this.taskSort,
+        search: this.taskSearch,
+      },
+    });
   }
 
   private getExistingMainLeaf(): WorkspaceLeaf | null {
@@ -1000,6 +1181,18 @@ export class ReminderView extends ItemView {
     if (!leaf) return null;
     if (leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) return null;
     return leaf.view instanceof MarkdownView ? leaf : null;
+  }
+
+  private getMainMarkdownLeafForFile(filePath: string): WorkspaceLeaf | null {
+    let result: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (result) return;
+      if (!this.getMainMarkdownLeaf(leaf)) return;
+      if (leaf.view instanceof MarkdownView && leaf.view.file?.path === filePath) {
+        result = leaf;
+      }
+    });
+    return result;
   }
 
   private getAnyMainLeaf(): WorkspaceLeaf | null {
@@ -1114,6 +1307,94 @@ class IgnoreTaskModal extends Modal {
   }
 }
 
+class NewItemModal extends Modal {
+  constructor(
+    app: App,
+    private onTask: () => void,
+    private onReminder: () => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.addClass("qr-modal");
+    this.contentEl.createEl("h2", { text: "New" });
+    const actions = this.contentEl.createDiv({ cls: "qr-choice-actions" });
+    actions.createEl("button", { text: "Task", cls: "qr-primary-btn" }).onclick = () => {
+      this.close();
+      this.onTask();
+    };
+    actions.createEl("button", { text: "Reminder", cls: "qr-secondary-btn" }).onclick = () => {
+      this.close();
+      this.onReminder();
+    };
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+class NewTaskModal extends Modal {
+  private inputEl!: HTMLInputElement;
+
+  constructor(
+    app: App,
+    private withReminder: boolean,
+    private onSubmit: (rawInput: string) => void | Promise<void>,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.addClass("qr-modal");
+    this.contentEl.createEl("h2", { text: this.withReminder ? "New reminder task" : "New task" });
+
+    const field = this.contentEl.createDiv({ cls: "qr-field" });
+    field.createEl("label", {
+      text: this.withReminder ? "Task and time" : "Task",
+      cls: "qr-field-label",
+    });
+    this.inputEl = field.createEl("input", {
+      type: "text",
+      cls: "qr-input",
+      placeholder: this.withReminder ? "e.g. call Alex tomorrow 3pm" : "e.g. follow up with Alex",
+    });
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void this.submit();
+      }
+    });
+
+    const actions = this.contentEl.createDiv({ cls: "qr-modal-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => this.close();
+    actions.createEl("button", {
+      text: this.withReminder ? "Create task + reminder" : "Create task",
+      cls: "qr-primary-btn",
+    }).onclick = () => {
+      void this.submit();
+    };
+    window.setTimeout(() => this.inputEl.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+
+  private async submit(): Promise<void> {
+    const value = this.inputEl.value.trim();
+    if (!value) {
+      new Notice("Enter a task.");
+      return;
+    }
+    await this.onSubmit(value);
+    this.close();
+  }
+}
+
 function getTasksPluginApi(app: unknown): TasksPluginApi | null {
   const tasksPlugin = (app as {
     plugins?: { plugins?: Record<string, unknown> };
@@ -1126,7 +1407,7 @@ function getSummaryText(
   overdueCount: number,
   upcomingCount: number,
   scrapedCount: number,
-  taskScope: TaskScope,
+  taskScope: TaskDashboardScope,
   activeFilePath: string | null,
   folderPath: string | null,
 ): string {
@@ -1149,7 +1430,11 @@ function getSummaryText(
   return "Nothing pending";
 }
 
-function getTaskScopeLabel(taskScope: TaskScope, activeFilePath: string | null, folderPath: string | null): string {
+function getTaskScopeLabel(
+  taskScope: TaskDashboardScope,
+  activeFilePath: string | null,
+  folderPath: string | null,
+): string {
   if (taskScope === "folder" && folderPath !== null) {
     return "folder tasks";
   }
@@ -1170,39 +1455,49 @@ function isInFolder(filePath: string, folderPath: string): boolean {
   return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
 }
 
-type TaskDisplayGroup = {
-  title: string;
-  categories: Array<{
+type TaskDisplayNoteGroup = {
+  filePath: string;
+  statuses: Array<{
     title: string;
-    tasks: ScrapedTask[];
+    categories: Array<{
+      title: string;
+      tasks: ScrapedTask[];
+    }>;
   }>;
 };
 
-function groupTasksForDisplay(tasks: ScrapedTask[]): TaskDisplayGroup[] {
+function groupTasksForDisplay(tasks: ScrapedTask[]): TaskDisplayNoteGroup[] {
   const statusOrder: Array<ScrapedTask["status"]> = ["in-progress", "todo", "marker", "completed"];
-  const groups: TaskDisplayGroup[] = [];
+  const notes: TaskDisplayNoteGroup[] = [];
 
-  for (const status of statusOrder) {
-    const statusTasks = tasks.filter((task) => task.status === status);
-    if (statusTasks.length === 0) {
-      continue;
+  for (const task of tasks) {
+    let note = notes.find((candidate) => candidate.filePath === task.filePath);
+    if (!note) {
+      note = { filePath: task.filePath, statuses: [] };
+      notes.push(note);
     }
 
-    const title = getTaskStatusTitle(status);
-    const categories: TaskDisplayGroup["categories"] = [];
-    for (const task of statusTasks) {
-      const categoryTitle = getTaskCategoryTitle(task, title);
-      let category = categories.find((candidate) => candidate.title === categoryTitle);
-      if (!category) {
-        category = { title: categoryTitle, tasks: [] };
-        categories.push(category);
-      }
-      category.tasks.push(task);
+    const statusTitle = getTaskStatusTitle(task.status);
+    let status = note.statuses.find((candidate) => candidate.title === statusTitle);
+    if (!status) {
+      status = { title: statusTitle, categories: [] };
+      note.statuses.push(status);
     }
-    groups.push({ title, categories });
+
+    const categoryTitle = getTaskCategoryTitle(task, statusTitle);
+    let category = status.categories.find((candidate) => candidate.title === categoryTitle);
+    if (!category) {
+      category = { title: categoryTitle, tasks: [] };
+      status.categories.push(category);
+    }
+    category.tasks.push(task);
   }
 
-  return groups;
+  for (const note of notes) {
+    note.statuses.sort((a, b) => statusOrder.indexOf(getStatusFromTitle(a.title)) - statusOrder.indexOf(getStatusFromTitle(b.title)));
+  }
+
+  return notes;
 }
 
 function getTaskStatusTitle(status: ScrapedTask["status"]): string {
@@ -1221,6 +1516,19 @@ function getTaskStatusTitle(status: ScrapedTask["status"]): string {
 function getTaskCategoryTitle(task: ScrapedTask, statusTitle: string): string {
   const category = task.category?.trim() || "Uncategorized";
   return category.toLowerCase() === statusTitle.toLowerCase() ? "" : category;
+}
+
+function getStatusFromTitle(title: string): ScrapedTask["status"] {
+  if (title === "In Progress") {
+    return "in-progress";
+  }
+  if (title === "Completed") {
+    return "completed";
+  }
+  if (title === "Markers") {
+    return "marker";
+  }
+  return "todo";
 }
 
 function compareTaskPageOrder(a: ScrapedTask, b: ScrapedTask): number {
@@ -1326,4 +1634,8 @@ function formatInputDate(ms: number): string {
 
 function hasFutureDueAt(dueAt: number | null): dueAt is number {
   return dueAt !== null && dueAt > Date.now();
+}
+
+function genReminderId(): string {
+  return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

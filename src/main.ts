@@ -80,10 +80,10 @@ export default class QuickReminderPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-view-main-tab",
-      name: "Open reminder manager as main tab",
+      id: "open-task-dashboard",
+      name: "Open task dashboard",
       callback: () => {
-        void this.openMainManagerForCurrentContext();
+        void this.openTaskDashboard();
       },
     });
 
@@ -169,11 +169,6 @@ export default class QuickReminderPlugin extends Plugin {
         this.clearSelectedTaskFolderHighlight();
         if (this.store.settings.autoRevealActiveFile) {
           void this.revealActiveFileInExplorer(false);
-        }
-        if (file instanceof TFile && file.extension === "md") {
-          window.setTimeout(() => {
-            void this.moveMainDashboardAsideForFile(file);
-          }, 0);
         }
       }),
     );
@@ -264,7 +259,7 @@ export default class QuickReminderPlugin extends Plugin {
     let leaf: WorkspaceLeaf | null;
 
     if (placement === "tab") {
-      leaf = existing[0] ?? getPreferredMainLeaf(workspace) ?? workspace.getLeaf("tab");
+      leaf = existing[0] ?? workspace.getLeaf("split", "vertical");
       if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
         await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: reveal });
       }
@@ -358,12 +353,51 @@ export default class QuickReminderPlugin extends Plugin {
     }
   }
 
-  private async openMainManagerForCurrentContext(): Promise<void> {
-    const file = this.app.workspace.getActiveFile();
-    const view = await this.activateView(true, "tab");
-    if (file instanceof TFile && file.extension === "md") {
-      view?.showActiveFile(file.path, file.parent?.path ?? "");
+  private async openTaskDashboard(): Promise<void> {
+    const activeLeaf = this.app.workspace.activeLeaf;
+    const activeView = activeLeaf?.view;
+    const file = activeView instanceof MarkdownView ? activeView.file : this.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      const view = await this.activateView(true, "tab");
+      view?.setScope("vault");
+      return;
     }
+
+    const noteLeaf =
+      getMainMarkdownLeafForFile(this.app.workspace, file.path) ??
+      (activeLeaf && isMainWorkspaceLeaf(activeLeaf) ? activeLeaf : getPreferredMainLeaf(this.app.workspace));
+    if (!noteLeaf) {
+      new Notice("Quick Reminder could not find a note pane.");
+      return;
+    }
+
+    await noteLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    await noteLeaf.loadIfDeferred();
+    this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
+    const noteTab = this.app.workspace.getLeaf("tab");
+    await noteTab.openFile(file, { active: false });
+
+    const managerLeaf = noteLeaf;
+    await managerLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+    await managerLeaf.loadIfDeferred();
+    if (managerLeaf.view instanceof ReminderView) {
+      managerLeaf.view.showActiveFile(file.path, file.parent?.path ?? "");
+    }
+    this.app.workspace.rightSplit.collapse();
+    await this.app.workspace.revealLeaf(managerLeaf);
+    this.app.workspace.setActiveLeaf(managerLeaf, { focus: true });
+    this.closeOtherMainManagerLeaves(managerLeaf);
+  }
+
+  private closeOtherMainManagerLeaves(keepLeaf: WorkspaceLeaf): void {
+    window.setTimeout(() => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
+        if (leaf === keepLeaf) continue;
+        if (isMainWorkspaceLeaf(leaf)) {
+          leaf.detach();
+        }
+      }
+    }, 0);
   }
 
   private handleFileExplorerFolderClick(event: MouseEvent): void {
@@ -631,6 +665,18 @@ function getPreferredMainLeaf(workspace: App["workspace"]): WorkspaceLeaf | null
   workspace.iterateAllLeaves((leaf) => {
     if (result) return;
     if (isMainWorkspaceLeaf(leaf)) {
+      result = leaf;
+    }
+  });
+  return result;
+}
+
+function getMainMarkdownLeafForFile(workspace: App["workspace"], filePath: string): WorkspaceLeaf | null {
+  let result: WorkspaceLeaf | null = null;
+  workspace.iterateAllLeaves((leaf) => {
+    if (result) return;
+    if (!isMainWorkspaceLeaf(leaf)) return;
+    if (leaf.view instanceof MarkdownView && leaf.view.file?.path === filePath) {
       result = leaf;
     }
   });
