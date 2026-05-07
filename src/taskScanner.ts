@@ -431,8 +431,8 @@ function getCheckboxStatus(status: string, text: string): ScrapedTask["status"] 
   return "todo";
 }
 
-function isSectionManagedCheckboxStatus(status: ScrapedTask["status"]): status is "todo" | "in-progress" | "completed" {
-  return status === "todo" || status === "in-progress" || status === "completed";
+function isSectionManagedCheckboxStatus(status: ScrapedTask["status"]): status is "todo" | "in-progress" | "completed" | "cancelled" {
+  return status === "todo" || status === "in-progress" || status === "completed" || status === "cancelled";
 }
 
 function hasInlineField(normalizedText: string, fieldName: string): boolean {
@@ -533,12 +533,15 @@ function ensureTaskSectionInsertIndex(lines: string[], sectionHeading: string): 
   return insertAt;
 }
 
-function getTaskSectionHeading(status: "todo" | "in-progress" | "completed"): string {
+function getTaskSectionHeading(status: "todo" | "in-progress" | "completed" | "cancelled"): string {
   if (status === "in-progress") {
     return "In Progress";
   }
   if (status === "completed") {
     return "Completed";
+  }
+  if (status === "cancelled") {
+    return "Cancelled";
   }
   return "To Do";
 }
