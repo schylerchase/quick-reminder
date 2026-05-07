@@ -42,6 +42,7 @@ export class TaskScanner {
       if (task) {
         const context = collectTaskContextNotes(lines, index);
         task.contextNotes = context.notes;
+        task.contextNoteLines = context.lines;
         tasks.push(task);
         index = context.lastIndex;
       }
@@ -80,7 +81,9 @@ export class TaskScanner {
     await this.app.vault.modify(file, lines.join(newline));
     const updatedTask = parseCheckboxTask(file, block[0], insertIndex + 1, sectionHeading);
     if (updatedTask) {
-      updatedTask.contextNotes = block.slice(1).map((noteLine) => stripTaskContextNote(noteLine)).filter(Boolean);
+      const contextLines = block.slice(1);
+      updatedTask.contextNotes = contextLines.map((noteLine) => stripTaskContextNote(noteLine)).filter(Boolean);
+      updatedTask.contextNoteLines = contextLines;
     }
     return updatedTask;
   }
@@ -159,6 +162,7 @@ export class TaskScanner {
     const task = parseCheckboxTask(file, line, insertIndex + 1, "To Do");
     if (task) {
       task.contextNotes = noteLines.map((noteLine) => stripTaskContextNote(noteLine)).filter(Boolean);
+      task.contextNoteLines = noteLines;
     }
     return task;
   }
@@ -188,6 +192,14 @@ export class TaskScanner {
   }
 
   async replaceTaskContextNotes(task: ScrapedTask, notes: string[]): Promise<boolean> {
+    return this.replaceTaskContextNoteLineArray(task, formatTaskContextNotes(notes));
+  }
+
+  async replaceTaskContextNoteLines(task: ScrapedTask, rawNoteBlock: string): Promise<boolean> {
+    return this.replaceTaskContextNoteLineArray(task, formatInlineContextNoteLines(rawNoteBlock));
+  }
+
+  private async replaceTaskContextNoteLineArray(task: ScrapedTask, noteLines: string[]): Promise<boolean> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) return false;
 
@@ -199,8 +211,7 @@ export class TaskScanner {
     if (!line || !isScannableTaskLine(line)) return false;
 
     const context = collectTaskContextNotes(lines, index);
-    const nextNoteLines = formatTaskContextNotes(notes);
-    lines.splice(index + 1, context.lastIndex - index, ...nextNoteLines);
+    lines.splice(index + 1, context.lastIndex - index, ...noteLines);
     await this.app.vault.modify(file, lines.join(newline));
     return true;
   }
@@ -306,6 +317,7 @@ function parseCheckboxTask(file: TFile, line: string, lineNumber: number, catego
     id: `${file.path}:${lineNumber}:checkbox`,
     text: cleanTaskText(checkbox.groups.text),
     contextNotes: [],
+    contextNoteLines: [],
     filePath: file.path,
     line: lineNumber,
     kind: "checkbox",
@@ -328,6 +340,7 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
     id: `${file.path}:${lineNumber}:${markerName}`,
     text: markerText,
     contextNotes: [],
+    contextNoteLines: [],
     filePath: file.path,
     line: lineNumber,
     kind: "marker",
@@ -339,9 +352,10 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
   };
 }
 
-function collectTaskContextNotes(lines: string[], taskIndex: number): { notes: string[]; lastIndex: number } {
+function collectTaskContextNotes(lines: string[], taskIndex: number): { notes: string[]; lines: string[]; lastIndex: number } {
   const taskIndent = getIndentLength(lines[taskIndex]);
   const notes: string[] = [];
+  const contextLines: string[] = [];
   let lastIndex = taskIndex;
 
   for (let index = taskIndex + 1; index < lines.length; index += 1) {
@@ -362,10 +376,11 @@ function collectTaskContextNotes(lines: string[], taskIndex: number): { notes: s
     if (note) {
       notes.push(note);
     }
+    contextLines.push(line);
     lastIndex = index;
   }
 
-  return { notes, lastIndex };
+  return { notes, lines: contextLines, lastIndex };
 }
 
 function getIndentLength(line: string): number {
@@ -378,6 +393,14 @@ function stripTaskContextNote(line: string): string {
 
 function formatTaskContextNotes(notes: string[]): string[] {
   return notes.map((note) => note.trim()).filter(Boolean).map((note) => `  - ${note}`);
+}
+
+function formatInlineContextNoteLines(rawNoteBlock: string): string[] {
+  return rawNoteBlock
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+$/g, ""))
+    .filter((line) => line.trim() !== "")
+    .map((line) => (getIndentLength(line) > 0 ? line : `  ${line}`));
 }
 
 function getCheckboxStatus(status: string, text: string): ScrapedTask["status"] {

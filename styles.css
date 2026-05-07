@@ -484,6 +484,8 @@
 }
 .qr-task-note-edit-input {
   min-height: 7.5em;
+  font-family: var(--font-monospace);
+  white-space: pre;
 }
 .qr-view-row-actions {
   display: flex;

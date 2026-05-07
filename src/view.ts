@@ -740,15 +740,15 @@ export class ReminderView extends ItemView {
   }
 
   private openTaskContextNoteEditor(task: ScrapedTask): void {
-    new TaskContextNoteModal(this.app, task, task.contextNotes, async (notes) => {
-      const saved = await this.taskScanner.replaceTaskContextNotes(task, notes);
+    new TaskContextNoteModal(this.app, task, async (rawNoteBlock) => {
+      const saved = await this.taskScanner.replaceTaskContextNoteLines(task, rawNoteBlock);
       if (!saved) {
         new Notice("Could not update notes. Open the source note and update it manually.");
         return;
       }
       await this.refreshScrapedTasks();
       await this.render();
-      new Notice(notes.length === 0 ? "Task notes cleared" : "Task notes updated");
+      new Notice(rawNoteBlock.trim() === "" ? "Task notes cleared" : "Task notes updated");
     }).open();
   }
 
@@ -1425,8 +1425,7 @@ class TaskContextNoteModal extends Modal {
   constructor(
     app: App,
     private task: ScrapedTask,
-    private initialNotes: string[],
-    private onSubmit: (notes: string[]) => void | Promise<void>,
+    private onSubmit: (rawNoteBlock: string) => void | Promise<void>,
   ) {
     super(app);
   }
@@ -1452,8 +1451,8 @@ class TaskContextNoteModal extends Modal {
       cls: "qr-ignore-note-input qr-task-note-edit-input",
     });
     this.noteEl.rows = 6;
-    this.noteEl.placeholder = "blocked by firewall change\nask vendor for installer flag\nverify on prod hosts";
-    this.noteEl.value = this.initialNotes.join("\n");
+    this.noteEl.placeholder = "  - blocked by firewall change\n  - ask vendor for installer flag\n  verify on prod hosts";
+    this.noteEl.value = getTaskContextNoteEditBlock(this.task);
 
     const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
@@ -1471,8 +1470,7 @@ class TaskContextNoteModal extends Modal {
   }
 
   private async submit(): Promise<void> {
-    const notes = splitContextNotes(this.noteEl.value);
-    await this.onSubmit(notes);
+    await this.onSubmit(this.noteEl.value);
     this.close();
   }
 }
@@ -1753,6 +1751,13 @@ function splitContextNotes(input: string): string[] {
 
 function normalizeContextNoteLines(lines: string[]): string[] {
   return lines.map((line) => line.trim().replace(/^[-*+]\s+/, "").trim()).filter(Boolean);
+}
+
+function getTaskContextNoteEditBlock(task: ScrapedTask): string {
+  if (task.contextNoteLines.length > 0) {
+    return task.contextNoteLines.join("\n");
+  }
+  return task.contextNotes.map((note) => `  - ${note}`).join("\n");
 }
 
 function hasInlinePriority(normalizedText: string, valuePattern: string): boolean {

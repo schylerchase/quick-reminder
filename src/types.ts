@@ -18,6 +18,7 @@ export interface ScrapedTask {
   id: string;
   text: string;
   contextNotes: string[];
+  contextNoteLines: string[];
   filePath: string;
   line: number;
   kind: "checkbox" | "marker";
