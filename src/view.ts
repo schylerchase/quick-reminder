@@ -1451,8 +1451,9 @@ class TaskContextNoteModal extends Modal {
       cls: "qr-ignore-note-input qr-task-note-edit-input",
     });
     this.noteEl.rows = 6;
-    this.noteEl.placeholder = "  - blocked by firewall change\n  - ask vendor for installer flag\n  verify on prod hosts";
+    this.noteEl.placeholder = "- blocked by firewall change\n- ask vendor for installer flag\nverify on prod hosts";
     this.noteEl.value = getTaskContextNoteEditBlock(this.task);
+    this.noteEl.addEventListener("keydown", (event) => handleTextareaIndent(event, this.noteEl));
 
     const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
@@ -1755,9 +1756,40 @@ function normalizeContextNoteLines(lines: string[]): string[] {
 
 function getTaskContextNoteEditBlock(task: ScrapedTask): string {
   if (task.contextNoteLines.length > 0) {
-    return task.contextNoteLines.join("\n");
+    return deindentLines(task.contextNoteLines).join("\n");
   }
-  return task.contextNotes.map((note) => `  - ${note}`).join("\n");
+  return task.contextNotes.join("\n");
+}
+
+function deindentLines(lines: string[]): string[] {
+  const commonIndent = getCommonIndentLength(lines);
+  return lines.map((line) => line.slice(commonIndent));
+}
+
+function getCommonIndentLength(lines: string[]): number {
+  const nonBlank = lines.filter((line) => line.trim() !== "");
+  if (nonBlank.length === 0) return 0;
+  return Math.min(...nonBlank.map((line) => line.match(/^\s*/)?.[0].length ?? 0));
+}
+
+function handleTextareaIndent(event: KeyboardEvent, textarea: HTMLTextAreaElement): void {
+  if (event.key !== "Tab") return;
+  event.preventDefault();
+
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const lineEnd = end === start ? end : value.indexOf("\n", end);
+  const selectionEnd = lineEnd === -1 ? value.length : lineEnd;
+  const selected = value.slice(lineStart, selectionEnd);
+  const updated = event.shiftKey
+    ? selected.replace(/^(?:  |\t)/gm, "")
+    : selected.replace(/^/gm, "  ");
+
+  textarea.value = `${value.slice(0, lineStart)}${updated}${value.slice(selectionEnd)}`;
+  textarea.selectionStart = lineStart;
+  textarea.selectionEnd = lineStart + updated.length;
 }
 
 function hasInlinePriority(normalizedText: string, valuePattern: string): boolean {

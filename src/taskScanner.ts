@@ -196,10 +196,10 @@ export class TaskScanner {
   }
 
   async replaceTaskContextNoteLines(task: ScrapedTask, rawNoteBlock: string): Promise<boolean> {
-    return this.replaceTaskContextNoteLineArray(task, formatInlineContextNoteLines(rawNoteBlock));
+    return this.replaceTaskContextNoteLineArray(task, rawNoteBlock);
   }
 
-  private async replaceTaskContextNoteLineArray(task: ScrapedTask, noteLines: string[]): Promise<boolean> {
+  private async replaceTaskContextNoteLineArray(task: ScrapedTask, noteBlock: string[] | string): Promise<boolean> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) return false;
 
@@ -211,6 +211,9 @@ export class TaskScanner {
     if (!line || !isScannableTaskLine(line)) return false;
 
     const context = collectTaskContextNotes(lines, index);
+    const noteLines = Array.isArray(noteBlock)
+      ? noteBlock
+      : formatInlineContextNoteLines(noteBlock, getIndentLength(line) + 2);
     lines.splice(index + 1, context.lastIndex - index, ...noteLines);
     await this.app.vault.modify(file, lines.join(newline));
     return true;
@@ -395,12 +398,20 @@ function formatTaskContextNotes(notes: string[]): string[] {
   return notes.map((note) => note.trim()).filter(Boolean).map((note) => `  - ${note}`);
 }
 
-function formatInlineContextNoteLines(rawNoteBlock: string): string[] {
-  return rawNoteBlock
+function formatInlineContextNoteLines(rawNoteBlock: string, baseIndentLength: number): string[] {
+  const lines = rawNoteBlock
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+$/g, ""))
-    .filter((line) => line.trim() !== "")
-    .map((line) => (getIndentLength(line) > 0 ? line : `  ${line}`));
+    .filter((line) => line.trim() !== "");
+  const commonIndent = getCommonIndentLength(lines);
+  const baseIndent = " ".repeat(baseIndentLength);
+  return lines.map((line) => `${baseIndent}${line.slice(commonIndent)}`);
+}
+
+function getCommonIndentLength(lines: string[]): number {
+  const indentedLines = lines.filter((line) => line.trim() !== "");
+  if (indentedLines.length === 0) return 0;
+  return Math.min(...indentedLines.map((line) => getIndentLength(line)));
 }
 
 function getCheckboxStatus(status: string, text: string): ScrapedTask["status"] {

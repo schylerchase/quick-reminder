@@ -485,7 +485,8 @@
 .qr-task-note-edit-input {
   min-height: 7.5em;
   font-family: var(--font-monospace);
-  white-space: pre;
+  white-space: pre-wrap;
+  tab-size: 2;
 }
 .qr-view-row-actions {
   display: flex;
