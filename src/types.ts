@@ -17,10 +17,11 @@ export interface Reminder {
 export interface ScrapedTask {
   id: string;
   text: string;
+  contextNotes: string[];
   filePath: string;
   line: number;
   kind: "checkbox" | "marker";
-  status: "todo" | "in-progress" | "completed" | "marker";
+  status: "todo" | "in-progress" | "completed" | "cancelled" | "marker";
   completed: boolean;
   category: string;
   project: string;

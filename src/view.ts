@@ -54,6 +54,7 @@ export class ReminderView extends ItemView {
   private taskSort: TaskDashboardSort = "page";
   private fileOpenRef: EventRef | null = null;
   private scanDebounceHandle: number | null = null;
+  private organizingTaskPaths = new Set<string>();
   private highlightedTaskId: string | null = null;
   private highlightTimeoutHandle: number | null = null;
 
@@ -226,6 +227,23 @@ export class ReminderView extends ItemView {
 
   private queueTaskRefreshForFile(file: TAbstractFile): void {
     if (this.shouldRefreshForVaultFile(file)) {
+      void this.organizeAndRefreshTasks(file as TFile);
+    }
+  }
+
+  private async organizeAndRefreshTasks(file: TFile): Promise<void> {
+    if (this.organizingTaskPaths.has(file.path)) {
+      this.queueTaskRefresh();
+      return;
+    }
+
+    this.organizingTaskPaths.add(file.path);
+    try {
+      await this.taskScanner.organizeTopLevelTaskSections(file.path);
+    } catch (error) {
+      console.error("Quick Reminder task auto-organization failed", error);
+    } finally {
+      this.organizingTaskPaths.delete(file.path);
       this.queueTaskRefresh();
     }
   }
@@ -414,8 +432,13 @@ export class ReminderView extends ItemView {
     search.value = this.taskSearch;
     search.oninput = () => {
       this.taskSearch = search.value;
+      this.applyTaskSearchFilter();
+    };
+    search.onblur = () => {
       void this.persistDashboardState();
-      void this.render();
+    };
+    search.onchange = () => {
+      void this.persistDashboardState();
     };
 
     const scopeSelect = toolbar.createEl("select", { cls: "qr-task-select" });
@@ -451,10 +474,31 @@ export class ReminderView extends ItemView {
       void this.render();
     };
 
-    toolbar.createDiv({
+    const count = toolbar.createDiv({
       text: `${visibleCount} of ${tasks.length}`,
       cls: "qr-task-filter-count",
     });
+    count.dataset.qrDefaultText = count.getText();
+  }
+
+  private applyTaskSearchFilter(): void {
+    const query = this.taskSearch.trim().toLowerCase();
+    const rows = Array.from(this.containerEl.querySelectorAll<HTMLElement>(".qr-scraped-row"));
+    let visibleCount = 0;
+
+    for (const row of rows) {
+      const haystack = row.dataset.qrTaskSearch ?? row.textContent?.toLowerCase() ?? "";
+      const visible = !query || haystack.includes(query);
+      row.toggleClass("qr-task-search-hidden", !visible);
+      if (visible) {
+        visibleCount += 1;
+      }
+    }
+
+    const count = this.containerEl.querySelector<HTMLElement>(".qr-task-filter-count");
+    if (count) {
+      count.setText(query ? `${visibleCount} matching` : count.dataset.qrDefaultText ?? count.getText());
+    }
   }
 
   private renderScrapedSection(
@@ -479,17 +523,23 @@ export class ReminderView extends ItemView {
     }
 
     const visibleTasks = tasks.slice(0, 150);
-    for (const note of groupTasksForDisplay(visibleTasks)) {
-      section.createDiv({ text: note.filePath, cls: "qr-task-note-title" });
+    if (this.taskSort === "priority") {
+      for (const task of visibleTasks) {
+        this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", true);
+      }
+    } else {
+      for (const note of groupTasksForDisplay(visibleTasks)) {
+        section.createDiv({ text: note.filePath, cls: "qr-task-note-title" });
 
-      for (const status of note.statuses) {
-        section.createDiv({ text: status.title, cls: "qr-task-group-title" });
-        for (const category of status.categories) {
-          if (category.title) {
-            section.createDiv({ text: category.title, cls: "qr-task-category-title" });
-          }
-          for (const task of category.tasks) {
-            this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", false);
+        for (const status of note.statuses) {
+          section.createDiv({ text: status.title, cls: "qr-task-group-title" });
+          for (const category of status.categories) {
+            if (category.title) {
+              section.createDiv({ text: category.title, cls: "qr-task-category-title" });
+            }
+            for (const task of category.tasks) {
+              this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", false);
+            }
           }
         }
       }
@@ -543,16 +593,32 @@ export class ReminderView extends ItemView {
     showFilePath = true,
   ): void {
     const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
+    row.dataset.qrTaskSearch = [task.text, ...task.contextNotes, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
+      .join(" ")
+      .toLowerCase();
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
     row.toggleClass("qr-view-row-highlight", task.id === this.highlightedTaskId);
     const body = row.createDiv({ cls: "qr-view-row-body" });
     const badges = body.createDiv({ cls: "qr-task-badges" });
     badges.createSpan({ text: getTaskBadgeText(task), cls: "qr-task-badge" });
+    if (task.contextNotes.length > 0) {
+      badges.createSpan({ text: `${task.contextNotes.length} notes`, cls: "qr-task-badge qr-task-context-badge" });
+    }
     if (isIgnored) {
       badges.createSpan({ text: "Ignored", cls: "qr-task-badge qr-task-muted-badge" });
     }
-    body.createDiv({ text: task.text, cls: "qr-view-row-text" });
+    body.createDiv({ text: task.text, cls: "qr-view-row-text qr-task-main-text" });
+    if (task.contextNotes.length > 0) {
+      const notes = body.createDiv({ cls: "qr-task-context-notes" });
+      const visibleContextNotes = task.contextNotes.slice(0, this.isMainWorkspaceView() ? 5 : 3);
+      for (const note of visibleContextNotes) {
+        notes.createDiv({ text: note, cls: "qr-task-context-note" });
+      }
+      if (task.contextNotes.length > visibleContextNotes.length) {
+        notes.createDiv({ text: `${task.contextNotes.length - visibleContextNotes.length} more notes`, cls: "qr-task-context-more" });
+      }
+    }
     const source = task.kind === "marker" && task.marker ? `${task.marker} - ` : "";
     body.createDiv({
       text: showFilePath ? `${source}${task.filePath}:${task.line}` : `${source}Line ${task.line}`,
@@ -565,6 +631,9 @@ export class ReminderView extends ItemView {
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
     actions.createEl("button", { text: "Show", cls: "qr-row-btn" }).onclick = async () => {
       await this.openTaskSource(task);
+    };
+    actions.createEl("button", { text: "Note", cls: "qr-row-btn" }).onclick = () => {
+      this.openTaskContextNoteEditor(task);
     };
 
     if (isIgnored) {
@@ -670,6 +739,19 @@ export class ReminderView extends ItemView {
     }).open();
   }
 
+  private openTaskContextNoteEditor(task: ScrapedTask): void {
+    new TaskContextNoteModal(this.app, task, task.contextNotes, async (notes) => {
+      const saved = await this.taskScanner.replaceTaskContextNotes(task, notes);
+      if (!saved) {
+        new Notice("Could not update notes. Open the source note and update it manually.");
+        return;
+      }
+      await this.refreshScrapedTasks();
+      await this.render();
+      new Notice(notes.length === 0 ? "Task notes cleared" : "Task notes updated");
+    }).open();
+  }
+
   private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
     row.oncontextmenu = (event) => {
       event.preventDefault();
@@ -696,6 +778,15 @@ export class ReminderView extends ItemView {
       }
 
       if (!isIgnored && task.kind === "checkbox") {
+        menu.addItem((item) => {
+          item
+            .setTitle("Edit task notes")
+            .setIcon("sticky-note")
+            .onClick(() => {
+              this.openTaskContextNoteEditor(task);
+            });
+        });
+
         menu.addItem((item) => {
           item
             .setTitle("Edit task")
@@ -790,7 +881,8 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    const task = await this.taskScanner.appendTask(filePath, taskText);
+    const { taskText: plainTaskText, contextNotes } = splitTaskInput(taskText);
+    const task = await this.taskScanner.appendTask(filePath, plainTaskText, contextNotes);
     if (!task) {
       new Notice("Could not add task to the source note.");
       return;
@@ -799,7 +891,7 @@ export class ReminderView extends ItemView {
     if (withReminder && parsed.dueAt) {
       const reminder: Reminder = {
         id: genReminderId(),
-        text: taskText,
+        text: plainTaskText,
         rawInput,
         dueAt: parsed.dueAt,
         createdAt: Date.now(),
@@ -825,8 +917,9 @@ export class ReminderView extends ItemView {
       new Notice("Could not update task. Open the note and update it manually.");
       return;
     }
+    await this.store.relinkTask(task.id, updated.id);
     await this.refreshScrapedTasks();
-    this.flashTask(task.id);
+    this.flashTask(updated.id);
     await this.render();
     new Notice(successMessage);
   }
@@ -844,12 +937,28 @@ export class ReminderView extends ItemView {
   }
 
   private async openTaskSource(task: ScrapedTask): Promise<void> {
-    await this.app.workspace.openLinkText(task.filePath, "", false);
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (view) {
-      view.editor.setCursor({ line: task.line - 1, ch: 0 });
-      view.editor.focus();
-      this.closeDuplicateMainFileLeaves(view.file, view.leaf, [0, 100, 300]);
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) {
+      new Notice("Could not find the source note.");
+      return;
+    }
+
+    const leaf = this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf();
+    if (!leaf) {
+      new Notice("Quick Reminder could not find a note pane.");
+      return;
+    }
+
+    if (!(leaf.view instanceof MarkdownView) || leaf.view.file?.path !== file.path) {
+      await leaf.openFile(file, { active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+
+    if (leaf.view instanceof MarkdownView) {
+      leaf.view.editor.setCursor({ line: task.line - 1, ch: 0 });
+      leaf.view.editor.focus();
+      this.closeDuplicateMainFileLeaves(file, leaf, [0, 100, 300]);
     }
   }
 
@@ -927,13 +1036,16 @@ export class ReminderView extends ItemView {
   private getFilteredScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
     const query = this.taskSearch.trim().toLowerCase();
     return tasks.filter((task) => {
+      if (task.status === "cancelled") {
+        return false;
+      }
       if (this.sourceFilter !== "all" && task.kind !== this.sourceFilter) {
         return false;
       }
       if (!query) {
         return true;
       }
-      return [task.text, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
+      return [task.text, ...task.contextNotes, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
         .join(" ")
         .toLowerCase()
         .includes(query);
@@ -999,7 +1111,7 @@ export class ReminderView extends ItemView {
     if (this.selectedFolderPath !== null) {
       return this.selectedFolderPath;
     }
-    return this.lastFolderPath;
+    return getCurrentFolderScopePath(this.lastMarkdownPath, this.lastFolderPath);
   }
 
   private captureActiveMarkdownContext(): void {
@@ -1307,6 +1419,64 @@ class IgnoreTaskModal extends Modal {
   }
 }
 
+class TaskContextNoteModal extends Modal {
+  private noteEl!: HTMLTextAreaElement;
+
+  constructor(
+    app: App,
+    private task: ScrapedTask,
+    private initialNotes: string[],
+    private onSubmit: (notes: string[]) => void | Promise<void>,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("qr-modal");
+
+    const header = contentEl.createDiv({ cls: "qr-modal-header" });
+    header.createEl("h2", { text: "Edit task notes" });
+
+    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
+
+    const field = contentEl.createDiv({ cls: "qr-field" });
+    field.createEl("label", {
+      text: "Note",
+      cls: "qr-field-label",
+      attr: { for: "qr-task-context-note" },
+    });
+    this.noteEl = field.createEl("textarea", {
+      attr: { id: "qr-task-context-note" },
+      cls: "qr-ignore-note-input qr-task-note-edit-input",
+    });
+    this.noteEl.rows = 6;
+    this.noteEl.placeholder = "blocked by firewall change\nask vendor for installer flag\nverify on prod hosts";
+    this.noteEl.value = this.initialNotes.join("\n");
+
+    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
+      this.close();
+    };
+    actions.createEl("button", { text: "Save notes", cls: "qr-primary-btn" }).onclick = () => {
+      void this.submit();
+    };
+
+    window.setTimeout(() => this.noteEl.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+
+  private async submit(): Promise<void> {
+    const notes = splitContextNotes(this.noteEl.value);
+    await this.onSubmit(notes);
+    this.close();
+  }
+}
+
 class NewItemModal extends Modal {
   constructor(
     app: App,
@@ -1337,7 +1507,7 @@ class NewItemModal extends Modal {
 }
 
 class NewTaskModal extends Modal {
-  private inputEl!: HTMLInputElement;
+  private inputEl!: HTMLTextAreaElement;
 
   constructor(
     app: App,
@@ -1357,13 +1527,13 @@ class NewTaskModal extends Modal {
       text: this.withReminder ? "Task and time" : "Task",
       cls: "qr-field-label",
     });
-    this.inputEl = field.createEl("input", {
-      type: "text",
+    this.inputEl = field.createEl("textarea", {
       cls: "qr-input",
       placeholder: this.withReminder ? "e.g. call Alex tomorrow 3pm" : "e.g. follow up with Alex",
     });
+    this.inputEl.rows = 4;
     this.inputEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         void this.submit();
       }
@@ -1455,6 +1625,16 @@ function isInFolder(filePath: string, folderPath: string): boolean {
   return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
 }
 
+function getCurrentFolderScopePath(filePath: string | null, folderPath: string | null): string | null {
+  if (folderPath === null) {
+    return null;
+  }
+  if (!filePath?.includes("/")) {
+    return folderPath;
+  }
+  return filePath.split("/")[0] ?? folderPath;
+}
+
 type TaskDisplayNoteGroup = {
   filePath: string;
   statuses: Array<{
@@ -1507,6 +1687,9 @@ function getTaskStatusTitle(status: ScrapedTask["status"]): string {
   if (status === "completed") {
     return "Completed";
   }
+  if (status === "cancelled") {
+    return "Cancelled";
+  }
   if (status === "marker") {
     return "Markers";
   }
@@ -1524,6 +1707,9 @@ function getStatusFromTitle(title: string): ScrapedTask["status"] {
   }
   if (title === "Completed") {
     return "completed";
+  }
+  if (title === "Cancelled") {
+    return "cancelled";
   }
   if (title === "Markers") {
     return "marker";
@@ -1553,6 +1739,20 @@ function getTaskPriorityRank(text: string): number {
     return 4;
   }
   return 5;
+}
+
+function splitTaskInput(input: string): { taskText: string; contextNotes: string[] } {
+  const lines = input.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const [taskText = "", ...contextNotes] = lines;
+  return { taskText, contextNotes: normalizeContextNoteLines(contextNotes) };
+}
+
+function splitContextNotes(input: string): string[] {
+  return normalizeContextNoteLines(input.split(/\r?\n/));
+}
+
+function normalizeContextNoteLines(lines: string[]): string[] {
+  return lines.map((line) => line.trim().replace(/^[-*+]\s+/, "").trim()).filter(Boolean);
 }
 
 function hasInlinePriority(normalizedText: string, valuePattern: string): boolean {

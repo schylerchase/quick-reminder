@@ -28,34 +28,166 @@ export class TaskScanner {
     const tasks: ScrapedTask[] = [];
     const state = new MarkdownScanState(lines);
 
-    lines.forEach((line, index) => {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
       if (state.shouldSkip(line, index)) {
-        return;
+        continue;
       }
 
       if (state.consumeHeading(line)) {
-        return;
+        continue;
       }
 
       const task = parseTaskLine(file, line, index + 1, state.currentCategory);
       if (task) {
+        const context = collectTaskContextNotes(lines, index);
+        task.contextNotes = context.notes;
         tasks.push(task);
+        index = context.lastIndex;
       }
-    });
+    }
 
     return tasks;
   }
 
   async completeCheckbox(task: ScrapedTask): Promise<boolean> {
-    return this.setCheckboxStatus(task, "completed");
+    return (await this.setCheckboxStatus(task, "completed")) !== null;
   }
 
   async uncompleteCheckbox(task: ScrapedTask): Promise<boolean> {
-    return this.setCheckboxStatus(task, "todo");
+    return (await this.setCheckboxStatus(task, "todo")) !== null;
   }
 
-  async setCheckboxStatus(task: ScrapedTask, status: "todo" | "in-progress" | "completed"): Promise<boolean> {
-    if (task.kind !== "checkbox") return false;
+  async setCheckboxStatus(task: ScrapedTask, status: "todo" | "in-progress" | "completed"): Promise<ScrapedTask | null> {
+    if (task.kind !== "checkbox") return null;
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) return null;
+
+    const content = await this.app.vault.read(file);
+    const newline = content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = content.split(/\r?\n/);
+    const index = task.line - 1;
+    const line = lines[index];
+    if (!line || !CHECKBOX_TASK_RE.test(line)) return null;
+
+    const context = collectTaskContextNotes(lines, index);
+    const block = lines.slice(index, context.lastIndex + 1);
+    block[0] = updateStatusMetadata(line.replace(/\[[^\]]\]/, `[${getCheckboxStatusMarker(status)}]`), status);
+    lines.splice(index, block.length);
+    const sectionHeading = getTaskSectionHeading(status);
+    const insertIndex = ensureTaskSectionInsertIndex(lines, sectionHeading);
+    lines.splice(insertIndex, 0, ...block);
+    await this.app.vault.modify(file, lines.join(newline));
+    const updatedTask = parseCheckboxTask(file, block[0], insertIndex + 1, sectionHeading);
+    if (updatedTask) {
+      updatedTask.contextNotes = block.slice(1).map((noteLine) => stripTaskContextNote(noteLine)).filter(Boolean);
+    }
+    return updatedTask;
+  }
+
+  async organizeTopLevelTaskSections(filePath: string): Promise<boolean> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) return false;
+
+    const content = await this.app.vault.read(file);
+    const newline = content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = content.split(/\r?\n/);
+    const tasksHeading = findHeadingIndex(lines, "Tasks");
+    if (tasksHeading === -1) return false;
+
+    const tasksEnd = findNextHeadingAtOrAbove(lines, tasksHeading + 1, 2);
+    const endIndex = tasksEnd === -1 ? lines.length : tasksEnd;
+    const moves: Array<{ start: number; end: number; section: string; block: string[] }> = [];
+    let currentSection = "";
+
+    for (let index = tasksHeading + 1; index < endIndex; index += 1) {
+      const heading = lines[index].match(HEADING_RE)?.groups?.heading?.trim();
+      if (heading) {
+        currentSection = heading;
+        continue;
+      }
+      if (getIndentLength(lines[index]) !== 0 || !CHECKBOX_TASK_RE.test(lines[index])) {
+        continue;
+      }
+
+      const task = parseCheckboxTask(file, lines[index], index + 1, currentSection);
+      if (!task) continue;
+      if (!isSectionManagedCheckboxStatus(task.status)) continue;
+
+      const section = getTaskSectionHeading(task.status);
+      if (section.toLowerCase() === currentSection.toLowerCase()) {
+        continue;
+      }
+
+      const context = collectTaskContextNotes(lines, index);
+      moves.push({
+        start: index,
+        end: context.lastIndex,
+        section,
+        block: lines.slice(index, context.lastIndex + 1),
+      });
+      index = context.lastIndex;
+    }
+
+    if (moves.length === 0) return false;
+
+    for (const move of [...moves].sort((a, b) => b.start - a.start)) {
+      lines.splice(move.start, move.end - move.start + 1);
+    }
+
+    for (const move of moves) {
+      const insertIndex = ensureTaskSectionInsertIndex(lines, move.section);
+      lines.splice(insertIndex, 0, ...move.block);
+    }
+
+    await this.app.vault.modify(file, lines.join(newline));
+    return true;
+  }
+
+  async appendTask(filePath: string, text: string, contextNotes: string[] = []): Promise<ScrapedTask | null> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) return null;
+
+    const content = await this.app.vault.read(file);
+    const newline = content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = content.split(/\r?\n/);
+    const insertIndex = ensureTaskSectionInsertIndex(lines, "To Do");
+    const line = `- [ ] ${text.trim()}`;
+    const noteLines = formatTaskContextNotes(contextNotes);
+    lines.splice(insertIndex, 0, line, ...noteLines);
+    await this.app.vault.modify(file, lines.join(newline));
+    const task = parseCheckboxTask(file, line, insertIndex + 1, "To Do");
+    if (task) {
+      task.contextNotes = noteLines.map((noteLine) => stripTaskContextNote(noteLine)).filter(Boolean);
+    }
+    return task;
+  }
+
+  async appendTaskContextNote(task: ScrapedTask, note: string): Promise<boolean> {
+    return this.appendTaskContextNotes(task, [note]);
+  }
+
+  async appendTaskContextNotes(task: ScrapedTask, notes: string[]): Promise<boolean> {
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) return false;
+
+    const trimmedNotes = notes.map((note) => note.trim()).filter(Boolean);
+    if (trimmedNotes.length === 0) return false;
+
+    const content = await this.app.vault.read(file);
+    const newline = content.includes("\r\n") ? "\r\n" : "\n";
+    const lines = content.split(/\r?\n/);
+    const index = task.line - 1;
+    const line = lines[index];
+    if (!line || !isScannableTaskLine(line)) return false;
+
+    const context = collectTaskContextNotes(lines, index);
+    lines.splice(context.lastIndex + 1, 0, ...formatTaskContextNotes(trimmedNotes));
+    await this.app.vault.modify(file, lines.join(newline));
+    return true;
+  }
+
+  async replaceTaskContextNotes(task: ScrapedTask, notes: string[]): Promise<boolean> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) return false;
 
@@ -64,25 +196,13 @@ export class TaskScanner {
     const lines = content.split(/\r?\n/);
     const index = task.line - 1;
     const line = lines[index];
-    if (!line || !CHECKBOX_TASK_RE.test(line)) return false;
+    if (!line || !isScannableTaskLine(line)) return false;
 
-    lines[index] = updateStatusMetadata(line.replace(/\[[^\]]\]/, `[${getCheckboxStatusMarker(status)}]`), status);
+    const context = collectTaskContextNotes(lines, index);
+    const nextNoteLines = formatTaskContextNotes(notes);
+    lines.splice(index + 1, context.lastIndex - index, ...nextNoteLines);
     await this.app.vault.modify(file, lines.join(newline));
     return true;
-  }
-
-  async appendTask(filePath: string, text: string): Promise<ScrapedTask | null> {
-    const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof TFile)) return null;
-
-    const content = await this.app.vault.read(file);
-    const newline = content.includes("\r\n") ? "\r\n" : "\n";
-    const lines = content.split(/\r?\n/);
-    const insertIndex = ensureTaskInsertIndex(lines);
-    const line = `- [ ] ${text.trim()}`;
-    lines.splice(insertIndex, 0, line);
-    await this.app.vault.modify(file, lines.join(newline));
-    return parseCheckboxTask(file, line, insertIndex + 1, "To Do");
   }
 
   async readTaskLine(task: ScrapedTask): Promise<string | null> {
@@ -121,7 +241,8 @@ export class TaskScanner {
     const line = lines[index];
     if (!line || !isScannableTaskLine(line)) return false;
 
-    lines.splice(index, 1);
+    const context = collectTaskContextNotes(lines, index);
+    lines.splice(index, context.lastIndex - index + 1);
     await this.app.vault.modify(file, lines.join(newline));
     return true;
   }
@@ -183,7 +304,8 @@ function parseCheckboxTask(file: TFile, line: string, lineNumber: number, catego
 
   return {
     id: `${file.path}:${lineNumber}:checkbox`,
-    text: checkbox.groups.text.trim(),
+    text: cleanTaskText(checkbox.groups.text),
+    contextNotes: [],
     filePath: file.path,
     line: lineNumber,
     kind: "checkbox",
@@ -205,6 +327,7 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
   return {
     id: `${file.path}:${lineNumber}:${markerName}`,
     text: markerText,
+    contextNotes: [],
     filePath: file.path,
     line: lineNumber,
     kind: "marker",
@@ -216,16 +339,66 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
   };
 }
 
+function collectTaskContextNotes(lines: string[], taskIndex: number): { notes: string[]; lastIndex: number } {
+  const taskIndent = getIndentLength(lines[taskIndex]);
+  const notes: string[] = [];
+  let lastIndex = taskIndex;
+
+  for (let index = taskIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === "") {
+      break;
+    }
+
+    const indent = getIndentLength(line);
+    if (indent <= taskIndent) {
+      break;
+    }
+    if (isScannableTaskLine(line)) {
+      break;
+    }
+
+    const note = stripTaskContextNote(line);
+    if (note) {
+      notes.push(note);
+    }
+    lastIndex = index;
+  }
+
+  return { notes, lastIndex };
+}
+
+function getIndentLength(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+function stripTaskContextNote(line: string): string {
+  return cleanTaskText(line.trim().replace(/^[-*+]\s+/, "").trim());
+}
+
+function formatTaskContextNotes(notes: string[]): string[] {
+  return notes.map((note) => note.trim()).filter(Boolean).map((note) => `  - ${note}`);
+}
+
 function getCheckboxStatus(status: string, text: string): ScrapedTask["status"] {
   const normalized = status.trim().toLowerCase();
   const normalizedText = text.toLowerCase();
-  if (normalized === "x" || hasInlineField(normalizedText, "completion")) {
+  const statusValue = getInlineFieldValue(text, "status") ?? getInlineFieldValue(text, "currentStatus");
+  const normalizedStatusValue = normalizeStatusValue(statusValue);
+  if (normalized === "-" || normalizedStatusValue === "cancelled" || hasInlineField(normalizedText, "cancelled")) {
+    return "cancelled";
+  }
+  if (normalized === "x" || normalizedStatusValue === "completed" || hasInlineField(normalizedText, "completion")) {
     return "completed";
   }
-  if (normalized === "/" || hasInlineField(normalizedText, "inprogress")) {
+  if (normalized === "/" || normalizedStatusValue === "in-progress" || hasInlineField(normalizedText, "inprogress")) {
     return "in-progress";
   }
   return "todo";
+}
+
+function isSectionManagedCheckboxStatus(status: ScrapedTask["status"]): status is "todo" | "in-progress" | "completed" {
+  return status === "todo" || status === "in-progress" || status === "completed";
 }
 
 function hasInlineField(normalizedText: string, fieldName: string): boolean {
@@ -245,11 +418,13 @@ function getCheckboxStatusMarker(status: "todo" | "in-progress" | "completed"): 
 function updateStatusMetadata(line: string, status: "todo" | "in-progress" | "completed"): string {
   let updated = removeInlineField(line, "inProgress");
   updated = removeInlineField(updated, "completion");
+  updated = removeInlineField(updated, "status");
+  updated = removeInlineField(updated, "currentStatus");
   if (status === "in-progress") {
-    return appendInlineField(updated, "inProgress", formatTaskTimestamp(new Date()));
+    return appendInlineField(updated, "status", "In Progress");
   }
   if (status === "completed") {
-    return appendInlineField(updated, "completion", formatTaskTimestamp(new Date()));
+    return appendInlineField(updated, "status", "Completed");
   }
   return updated.trimEnd();
 }
@@ -259,7 +434,34 @@ function removeInlineField(line: string, fieldName: string): string {
 }
 
 function appendInlineField(line: string, fieldName: string, value: string): string {
-  return `${line.trimEnd()} \`[${fieldName}:: ${value}]\``;
+  return `${line.trimEnd()} [${fieldName}:: ${value}]`;
+}
+
+function cleanTaskText(text: string): string {
+  return stripStatusFields(text).replace(/\s{2,}/g, " ").trim();
+}
+
+function stripStatusFields(text: string): string {
+  let updated = text;
+  for (const fieldName of ["status", "currentStatus", "inProgress", "completion", "cancelled"]) {
+    updated = updated.replace(new RegExp("\\s*`?\\[\\s*" + fieldName + "\\s*::[^\\]]*\\]`?", "gi"), "");
+  }
+  return updated.trim();
+}
+
+function getInlineFieldValue(text: string, fieldName: string): string | null {
+  const match = text.match(new RegExp(`\\[\\s*${fieldName}\\s*::\\s*([^\\]]+)\\]`, "i"));
+  return match?.[1]?.replace(/`/g, "").trim() ?? null;
+}
+
+function normalizeStatusValue(value: string | null): ScrapedTask["status"] | null {
+  const normalized = value?.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!normalized) return null;
+  if (normalized === "inprogress") return "in-progress";
+  if (normalized === "todo" || normalized === "to") return "todo";
+  if (normalized === "completed" || normalized === "complete" || normalized === "done") return "completed";
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  return null;
 }
 
 function formatTaskTimestamp(date: Date): string {
@@ -271,30 +473,52 @@ function formatTaskTimestamp(date: Date): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
-function ensureTaskInsertIndex(lines: string[]): number {
+function ensureTaskSectionInsertIndex(lines: string[], sectionHeading: string): number {
   let tasksHeading = findHeadingIndex(lines, "Tasks");
   if (tasksHeading === -1) {
     if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
       lines.push("");
     }
-    lines.push("## Tasks", "", "### To Do", "");
+    lines.push("## Tasks", "", `### ${sectionHeading}`, "");
     return lines.length;
   }
 
-  let todoHeading = findHeadingIndex(lines, "To Do", tasksHeading + 1);
-  if (todoHeading === -1) {
+  let sectionIndex = findTaskSectionHeadingIndex(lines, sectionHeading, tasksHeading);
+  if (sectionIndex === -1) {
     const nextTopLevel = findNextHeadingAtOrAbove(lines, tasksHeading + 1, 2);
     const insertHeadingAt = nextTopLevel === -1 ? lines.length : nextTopLevel;
-    const headingBlock = ["", "### To Do", ""];
+    const headingBlock = ["", `### ${sectionHeading}`, ""];
     lines.splice(insertHeadingAt, 0, ...headingBlock);
-    todoHeading = insertHeadingAt + 1;
+    sectionIndex = insertHeadingAt + 1;
   }
 
-  let insertAt = todoHeading + 1;
+  let insertAt = sectionIndex + 1;
   while (insertAt < lines.length && lines[insertAt].trim() === "") {
     insertAt += 1;
   }
   return insertAt;
+}
+
+function getTaskSectionHeading(status: "todo" | "in-progress" | "completed"): string {
+  if (status === "in-progress") {
+    return "In Progress";
+  }
+  if (status === "completed") {
+    return "Completed";
+  }
+  return "To Do";
+}
+
+function findTaskSectionHeadingIndex(lines: string[], headingName: string, tasksHeadingIndex: number): number {
+  const nextTopLevel = findNextHeadingAtOrAbove(lines, tasksHeadingIndex + 1, 2);
+  const endIndex = nextTopLevel === -1 ? lines.length : nextTopLevel;
+  for (let i = tasksHeadingIndex + 1; i < endIndex; i += 1) {
+    const heading = lines[i].match(HEADING_RE)?.groups?.heading?.trim();
+    if (heading?.toLowerCase() === headingName.toLowerCase()) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 function findHeadingIndex(lines: string[], headingName: string, startIndex = 0): number {

@@ -159,6 +159,28 @@ export class ReminderStore {
     await this.persist();
   }
 
+  async relinkTask(oldId: string, newId: string): Promise<void> {
+    if (oldId === newId) return;
+
+    for (const reminder of this.data.reminders) {
+      if (reminder.sourceTaskId === oldId) {
+        reminder.sourceTaskId = newId;
+      }
+    }
+
+    const ignoredIndex = this.data.ignoredTaskIds.indexOf(oldId);
+    if (ignoredIndex !== -1) {
+      this.data.ignoredTaskIds[ignoredIndex] = newId;
+    }
+
+    if (this.data.ignoredTaskNotes?.[oldId] !== undefined) {
+      this.data.ignoredTaskNotes[newId] = this.data.ignoredTaskNotes[oldId];
+      delete this.data.ignoredTaskNotes[oldId];
+    }
+
+    await this.persist();
+  }
+
   async updateSettings(patch: Partial<Settings>): Promise<void> {
     this.data.settings = { ...this.data.settings, ...patch };
     await this.persist();
