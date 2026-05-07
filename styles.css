@@ -318,9 +318,24 @@
 }
 .qr-view-row:hover { border-color: var(--background-modifier-border); }
 .qr-scraped-row {
-  border-left: 2px solid var(--interactive-accent);
+  border-left: 3px solid var(--interactive-accent);
   flex-direction: column;
   gap: 0.45em;
+}
+.qr-scraped-row.qr-task-status-in-progress {
+  border-left-color: var(--interactive-accent);
+}
+.qr-scraped-row.qr-task-status-todo {
+  border-left-color: var(--text-warning);
+}
+.qr-scraped-row.qr-task-status-completed {
+  border-left-color: var(--text-success);
+}
+.qr-scraped-row.qr-task-status-marker {
+  border-left-color: var(--text-accent);
+}
+.qr-scraped-row.qr-task-status-cancelled {
+  border-left-color: var(--text-faint);
 }
 .qr-scraped-row .qr-view-row-body,
 .qr-scraped-row .qr-view-row-actions {
@@ -333,7 +348,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  padding: 0.7em 0.75em;
+  padding: 0.7em 0.75em 0.7em 0.85em;
 }
 .qr-view-dashboard .qr-view-row-text {
   font-size: 0.96em;
@@ -384,7 +399,7 @@
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  padding: 0.08em 0.38em;
+  padding: 0.1em 0.42em;
   border-radius: 4px;
   background: var(--background-modifier-border);
   color: var(--text-muted);
@@ -392,6 +407,33 @@
   font-weight: 650;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+.qr-task-status-badge {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  font-weight: 760;
+}
+.qr-task-status-badge.qr-task-status-todo {
+  color: var(--background-primary);
+  background: var(--text-warning);
+}
+.qr-task-status-badge.qr-task-status-completed {
+  color: var(--background-primary);
+  background: var(--text-success);
+}
+.qr-task-status-badge.qr-task-status-marker {
+  color: var(--text-on-accent);
+  background: var(--text-accent);
+}
+.qr-task-status-badge.qr-task-status-cancelled,
+.qr-task-status-badge.qr-task-status-ignored {
+  color: var(--text-normal);
+  background: var(--background-modifier-border);
+}
+.qr-task-kind-badge {
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
 }
 .qr-task-context-badge {
   color: var(--text-accent);
@@ -408,6 +450,9 @@
 }
 .qr-task-group-title {
   margin: 0.65em 0 0.25em;
+  padding: 0.25em 0.45em;
+  border-left: 3px solid var(--background-modifier-border);
+  background: var(--background-secondary);
   color: var(--text-normal);
   font-size: 0.86em;
   font-weight: 700;

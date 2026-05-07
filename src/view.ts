@@ -596,12 +596,17 @@ export class ReminderView extends ItemView {
     row.dataset.qrTaskSearch = [task.text, ...task.contextNotes, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
       .join(" ")
       .toLowerCase();
+    row.addClass(`qr-task-status-${getTaskStatusClassName(task.status)}`);
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
     row.toggleClass("qr-view-row-highlight", task.id === this.highlightedTaskId);
     const body = row.createDiv({ cls: "qr-view-row-body" });
     const badges = body.createDiv({ cls: "qr-task-badges" });
-    badges.createSpan({ text: getTaskBadgeText(task), cls: "qr-task-badge" });
+    badges.createSpan({
+      text: getTaskStatusTitle(task.status),
+      cls: `qr-task-badge qr-task-status-badge qr-task-status-${getTaskStatusClassName(task.status)}`,
+    });
+    badges.createSpan({ text: getTaskKindBadgeText(task), cls: "qr-task-badge qr-task-kind-badge" });
     if (task.contextNotes.length > 0) {
       badges.createSpan({ text: `${task.contextNotes.length} notes`, cls: "qr-task-badge qr-task-context-badge" });
     }
@@ -1813,8 +1818,12 @@ function getEmptyScrapedText(title: string, totalCount: number): string {
   return "No unchecked tasks or TODO markers found.";
 }
 
-function getTaskBadgeText(task: ScrapedTask): string {
-  return task.kind === "checkbox" ? "Task" : task.marker ?? "Marker";
+function getTaskKindBadgeText(task: ScrapedTask): string {
+  return task.kind === "checkbox" ? "Checkbox" : task.marker ?? "Marker";
+}
+
+function getTaskStatusClassName(status: ScrapedTask["status"]): string {
+  return status.replace(/[^a-z0-9]+/g, "-");
 }
 
 function getEmptyText(title: string, isHistory: boolean): string {
