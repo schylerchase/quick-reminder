@@ -315,10 +315,12 @@ function parseCheckboxTask(file: TFile, line: string, lineNumber: number, catego
     return null;
   }
   const status = getCheckboxStatus(checkbox.groups.status, checkbox.groups.text);
+  const text = cleanTaskText(checkbox.groups.text);
 
   return {
-    id: `${file.path}:${lineNumber}:checkbox`,
-    text: cleanTaskText(checkbox.groups.text),
+    id: buildCheckboxTaskId(file.path, text),
+    legacyIds: [`${file.path}:${lineNumber}:checkbox`, `${file.path}:${lineNumber}:checkbox:${text}`],
+    text,
     contextNotes: [],
     contextNoteLines: [],
     filePath: file.path,
@@ -340,7 +342,8 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
 
   const markerName = marker.groups.marker.toUpperCase();
   return {
-    id: `${file.path}:${lineNumber}:${markerName}`,
+    id: buildMarkerTaskId(file.path, markerName, markerText),
+    legacyIds: [`${file.path}:${lineNumber}:${markerName}`],
     text: markerText,
     contextNotes: [],
     contextNoteLines: [],
@@ -353,6 +356,27 @@ function parseMarkerTask(file: TFile, line: string, lineNumber: number, category
     project: getProjectName(file),
     marker: markerName,
   };
+}
+
+export function buildCheckboxTaskId(filePath: string, text: string): string {
+  return `task:${stableHash([filePath, "checkbox", normalizeTaskIdentityText(text)].join("\u001f"))}`;
+}
+
+function buildMarkerTaskId(filePath: string, markerName: string, text: string): string {
+  return `task:${stableHash([filePath, markerName, normalizeTaskIdentityText(text)].join("\u001f"))}`;
+}
+
+function normalizeTaskIdentityText(text: string): string {
+  return cleanTaskText(text).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function stableHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function collectTaskContextNotes(lines: string[], taskIndex: number): { notes: string[]; lines: string[]; lastIndex: number } {
@@ -496,15 +520,6 @@ function normalizeStatusValue(value: string | null): ScrapedTask["status"] | nul
   if (normalized === "completed" || normalized === "complete" || normalized === "done") return "completed";
   if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
   return null;
-}
-
-function formatTaskTimestamp(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
 function ensureTaskSectionInsertIndex(lines: string[], sectionHeading: string): number {

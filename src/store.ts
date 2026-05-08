@@ -6,6 +6,7 @@ import {
   PluginData,
   REMINDER_CONFIG_DIR,
   Reminder,
+  ScrapedTask,
   Settings,
 } from "./types";
 
@@ -88,11 +89,7 @@ export class ReminderStore {
   }
 
   async markNotified(id: string): Promise<void> {
-    const r = this.data.reminders.find((x) => x.id === id);
-    if (!r) return;
-    r.notified = true;
-    r.completedAt = Date.now();
-    await this.persist();
+    await this.complete(id);
   }
 
   async complete(id: string): Promise<void> {
@@ -179,6 +176,42 @@ export class ReminderStore {
     }
 
     await this.persist();
+  }
+
+  async relinkTaskReferences(tasks: ScrapedTask[]): Promise<void> {
+    let changed = false;
+    const taskIds = new Set(tasks.map((task) => task.id));
+    const legacyIdMap = new Map<string, string>();
+    for (const task of tasks) {
+      for (const legacyId of task.legacyIds) {
+        legacyIdMap.set(legacyId, task.id);
+      }
+    }
+
+    for (const reminder of this.data.reminders) {
+      if (!reminder.sourceTaskId || taskIds.has(reminder.sourceTaskId)) continue;
+      const nextTaskId = legacyIdMap.get(reminder.sourceTaskId) ?? findLegacyReminderTask(reminder, tasks)?.id;
+      if (!nextTaskId || nextTaskId === reminder.sourceTaskId) continue;
+      reminder.sourceTaskId = nextTaskId;
+      changed = true;
+    }
+
+    for (let index = 0; index < this.data.ignoredTaskIds.length; index += 1) {
+      const taskId = this.data.ignoredTaskIds[index];
+      if (taskIds.has(taskId)) continue;
+      const nextTaskId = legacyIdMap.get(taskId);
+      if (!nextTaskId || nextTaskId === taskId) continue;
+      this.data.ignoredTaskIds[index] = nextTaskId;
+      if (this.data.ignoredTaskNotes?.[taskId] !== undefined) {
+        this.data.ignoredTaskNotes[nextTaskId] = this.data.ignoredTaskNotes[taskId];
+        delete this.data.ignoredTaskNotes[taskId];
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      await this.persist();
+    }
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<void> {
@@ -310,4 +343,27 @@ function formatDate(ms: number): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function findLegacyReminderTask(reminder: Reminder, tasks: ScrapedTask[]): ScrapedTask | null {
+  if (!reminder.sourceTaskId) return null;
+  const legacy = parseLegacyTaskId(reminder.sourceTaskId);
+  if (!legacy) return null;
+  const reminderText = normalizeIdentityText(reminder.text);
+  return tasks.find((task) => {
+    if (task.filePath !== legacy.filePath) return false;
+    const taskText = normalizeIdentityText(task.text);
+    const legacyText = normalizeIdentityText(legacy.text ?? "");
+    return (reminderText !== "" && taskText.includes(reminderText))
+      || (legacyText !== "" && taskText.includes(legacyText));
+  }) ?? null;
+}
+
+function parseLegacyTaskId(id: string): { filePath: string; text: string | null } | null {
+  const match = id.match(/^(?<filePath>.+):(?<line>\d+):(?<kind>checkbox|TODO|FIXME|TASK)(?::(?<text>.*))?$/);
+  return match?.groups ? { filePath: match.groups.filePath, text: match.groups.text ?? null } : null;
+}
+
+function normalizeIdentityText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
 }

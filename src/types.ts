@@ -16,6 +16,7 @@ export interface Reminder {
 
 export interface ScrapedTask {
   id: string;
+  legacyIds: string[];
   text: string;
   contextNotes: string[];
   contextNoteLines: string[];

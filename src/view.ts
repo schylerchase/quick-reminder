@@ -216,6 +216,7 @@ export class ReminderView extends ItemView {
     this.isScanningTasks = true;
     try {
       this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
+      await this.store.relinkTaskReferences(this.scrapedTasks);
       this.hasScannedTasks = true;
     } catch (error) {
       console.error("Quick Reminder task scan failed", error);
@@ -1023,9 +1024,12 @@ export class ReminderView extends ItemView {
   }
 
   private async deleteTask(task: ScrapedTask): Promise<void> {
-    const confirmed = window.confirm(`Delete this task from ${task.filePath}:${task.line}?`);
-    if (!confirmed) return;
+    new DeleteTaskModal(this.app, task, async () => {
+      await this.confirmDeleteTask(task);
+    }).open();
+  }
 
+  private async confirmDeleteTask(task: ScrapedTask): Promise<void> {
     const deleted = await this.taskScanner.deleteTaskLine(task);
     if (!deleted) {
       new Notice("Could not delete task. Open the note and update it manually.");
@@ -1424,6 +1428,47 @@ class IgnoreTaskModal extends Modal {
   }
 }
 
+class DeleteTaskModal extends Modal {
+  constructor(
+    app: App,
+    private task: ScrapedTask,
+    private onConfirm: () => void | Promise<void>,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("qr-modal");
+
+    const header = contentEl.createDiv({ cls: "qr-modal-header" });
+    header.createEl("h2", { text: "Delete task" });
+    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
+    contentEl.createDiv({
+      text: `${this.task.filePath}:${this.task.line}`,
+      cls: "qr-view-row-when",
+    });
+
+    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
+      this.close();
+    };
+    actions.createEl("button", { text: "Delete", cls: "qr-primary-btn qr-view-del" }).onclick = () => {
+      void this.submit();
+    };
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+
+  private async submit(): Promise<void> {
+    await this.onConfirm();
+    this.close();
+  }
+}
+
 class TaskContextNoteModal extends Modal {
   private noteEl!: HTMLTextAreaElement;
 
@@ -1749,10 +1794,6 @@ function splitTaskInput(input: string): { taskText: string; contextNotes: string
   const lines = input.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const [taskText = "", ...contextNotes] = lines;
   return { taskText, contextNotes: normalizeContextNoteLines(contextNotes) };
-}
-
-function splitContextNotes(input: string): string[] {
-  return normalizeContextNoteLines(input.split(/\r?\n/));
 }
 
 function normalizeContextNoteLines(lines: string[]): string[] {

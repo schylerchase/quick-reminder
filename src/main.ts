@@ -18,7 +18,7 @@ import { DEFAULT_MIRROR_FILE_PATH, PluginData, Reminder } from "./types";
 import { parseReminder } from "./parser";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
 import { NoPublicReleaseError, PluginUpdater } from "./updater";
-import { TaskScanner } from "./taskScanner";
+import { buildCheckboxTaskId, TaskScanner } from "./taskScanner";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
@@ -155,9 +155,6 @@ export default class QuickReminderPlugin extends Plugin {
     this.addSettingTab(new QuickReminderSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(async () => {
-      if (typeof Notification !== "undefined" && Notification.permission === "default") {
-        await Notification.requestPermission();
-      }
       await this.scheduler.scanOverdue();
       this.scheduler.scheduleAll();
       void this.notifyIfUpdateAvailable();
@@ -592,7 +589,7 @@ export default class QuickReminderPlugin extends Plugin {
     editor.replaceRange(`\n${line}`, { line: cursor.line, ch: currentLine.length });
   }
 
-  private async addReminderFromTaskLine(line: string, filePath: string | null, lineNumber: number): Promise<void> {
+  private async addReminderFromTaskLine(line: string, filePath: string | null, _lineNumber: number): Promise<void> {
     const parsed = parseReminder(cleanMarkdownTaskLine(line));
     if (!parsed.dueAt || parsed.dueAt <= Date.now()) {
       new Notice("Task added. Add a date or time to show it as a reminder.");
@@ -608,7 +605,7 @@ export default class QuickReminderPlugin extends Plugin {
       notified: false,
     };
     if (filePath) {
-      reminder.sourceTaskId = `${filePath}:${lineNumber}:checkbox:${parsed.text}`;
+      reminder.sourceTaskId = buildCheckboxTaskId(filePath, cleanMarkdownTaskLine(line));
     }
 
     await this.store.add(reminder);

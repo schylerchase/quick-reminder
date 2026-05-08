@@ -3,6 +3,7 @@ import { Reminder } from "./types";
 import { ReminderStore } from "./store";
 
 type FireCallback = (reminder: Reminder) => void;
+const MAX_TIMEOUT_MS = 2_147_483_000;
 
 export class Scheduler {
   private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -25,9 +26,13 @@ export class Scheduler {
     if (delay <= 0) {
       return;
     }
-    const clamped = Math.min(delay, 2_147_483_000);
+    const clamped = Math.min(delay, MAX_TIMEOUT_MS);
     const timer = setTimeout(() => {
       this.timers.delete(reminder.id);
+      if (reminder.dueAt > Date.now()) {
+        this.schedule(reminder);
+        return;
+      }
       this.fire(reminder);
     }, clamped);
     this.timers.set(reminder.id, timer);
