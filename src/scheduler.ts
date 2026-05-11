@@ -73,7 +73,7 @@ export class Scheduler {
       showNativeNotification(reminder, this.store.settings.soundOnNotify);
     } catch (e) {
       console.error("native notify failed, falling back to Notice", e);
-      new Notice(`Reminder: ${reminder.text}`, 10_000);
+      showFallbackNotice(reminder);
     }
     this.onFire(reminder);
   }
@@ -100,8 +100,23 @@ function showNativeNotification(reminder: Reminder, silent: boolean): void {
   if (Notification.permission === "granted") {
     fire();
   } else if (Notification.permission !== "denied") {
-    Notification.requestPermission().then((perm) => {
-      if (perm === "granted") fire();
-    });
+    Notification.requestPermission()
+      .then((perm) => {
+        if (perm === "granted") {
+          fire();
+        } else {
+          showFallbackNotice(reminder);
+        }
+      })
+      .catch((e) => {
+        console.error("notification permission request failed", e);
+        showFallbackNotice(reminder);
+      });
+  } else {
+    showFallbackNotice(reminder);
   }
+}
+
+function showFallbackNotice(reminder: Reminder): void {
+  new Notice(`Reminder: ${reminder.text}`, 10_000);
 }

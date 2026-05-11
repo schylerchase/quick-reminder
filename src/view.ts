@@ -1889,8 +1889,11 @@ function formatWhen(ms: number): string {
 }
 
 function formatHistoryWhen(reminder: Reminder): string {
-  const completedAt = reminder.completedAt ?? reminder.dueAt;
-  return `${formatAgo(completedAt)} done - due ${formatExact(reminder.dueAt)}`;
+  if (reminder.completedAt) {
+    return `${formatAgo(reminder.completedAt)} done - due ${formatExact(reminder.dueAt)}`;
+  }
+  const notifiedAt = reminder.notifiedAt ?? reminder.dueAt;
+  return `${formatAgo(notifiedAt)} notified - due ${formatExact(reminder.dueAt)}`;
 }
 
 function formatAgo(ms: number): string {

@@ -9,6 +9,7 @@ export interface Reminder {
   dueAt: number;
   createdAt: number;
   notified: boolean;
+  notifiedAt?: number;
   completedAt?: number;
   snoozedFrom?: number;
   sourceTaskId?: string;

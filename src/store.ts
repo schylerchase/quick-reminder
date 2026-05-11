@@ -89,7 +89,11 @@ export class ReminderStore {
   }
 
   async markNotified(id: string): Promise<void> {
-    await this.complete(id);
+    const r = this.data.reminders.find((x) => x.id === id);
+    if (!r) return;
+    r.notified = true;
+    r.notifiedAt = Date.now();
+    await this.persist();
   }
 
   async complete(id: string): Promise<void> {
@@ -104,6 +108,7 @@ export class ReminderStore {
     const r = this.data.reminders.find((x) => x.id === id);
     if (!r) return;
     r.notified = false;
+    delete r.notifiedAt;
     delete r.completedAt;
     await this.persist();
   }
@@ -115,6 +120,7 @@ export class ReminderStore {
     r.rawInput = `${text} ${new Date(dueAt).toLocaleString()}`;
     r.dueAt = dueAt;
     r.notified = false;
+    delete r.notifiedAt;
     delete r.completedAt;
     await this.persist();
   }
@@ -125,10 +131,10 @@ export class ReminderStore {
     r.snoozedFrom = r.dueAt;
     r.dueAt = Date.now() + minutes * 60_000;
     r.notified = false;
+    delete r.notifiedAt;
     delete r.completedAt;
     await this.persist();
   }
-
   async remove(id: string): Promise<void> {
     this.data.reminders = this.data.reminders.filter((r) => r.id !== id);
     await this.persist();
@@ -326,7 +332,8 @@ export class ReminderStore {
       lines.push("_None._", "");
     } else {
       for (const r of done.slice(-20).reverse()) {
-        lines.push(`- [x] ${r.text} - ${formatDate(r.dueAt)}`);
+        const marker = r.completedAt ? "x" : " ";
+        lines.push(`- [${marker}] ${r.text} - ${formatDate(r.dueAt)}`);
       }
     }
 
