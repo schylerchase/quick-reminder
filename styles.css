@@ -2,6 +2,12 @@
   display: flex;
   flex-direction: column;
   gap: 0.9em;
+  box-sizing: border-box;
+}
+.qr-modal *,
+.qr-modal *::before,
+.qr-modal *::after {
+  box-sizing: inherit;
 }
 .qr-modal-header h2 { margin: 0 0 0.25em; }
 .qr-field {
@@ -136,7 +142,18 @@
   color: var(--text-muted);
 }
 .qr-list-when { font-size: 0.85em; }
-.qr-view { padding: 0.85em 0.7em; }
+.qr-view {
+  box-sizing: border-box;
+  container-type: inline-size;
+  max-width: 100%;
+  overflow-x: hidden;
+  padding: 0.85em 0.7em;
+}
+.qr-view *,
+.qr-view *::before,
+.qr-view *::after {
+  box-sizing: inherit;
+}
 .qr-view-dashboard {
   max-width: 1320px;
   margin: 0 auto;
@@ -184,6 +201,9 @@
   gap: 0.35em;
   flex-shrink: 0;
 }
+.qr-view-header-actions button {
+  min-width: 0;
+}
 .qr-view-secondary-btn {
   font-size: 0.82em;
   padding: 0.35em 0.7em;
@@ -230,7 +250,7 @@
 }
 .qr-task-toolbar {
   display: grid;
-  grid-template-columns: minmax(8em, 1fr) minmax(0, 0.72fr) minmax(0, 0.72fr) minmax(0, 0.72fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.75em), 1fr));
   gap: 0.4em;
   align-items: center;
   margin-bottom: 1em;
@@ -253,7 +273,11 @@
   font-size: 0.82em;
 }
 .qr-task-search {
+  grid-column: 1 / -1;
   padding: 0.42em 0.55em;
+}
+.qr-view-dashboard .qr-task-search {
+  grid-column: auto;
 }
 .qr-task-select {
   padding: 0.35em 0.4em;
@@ -272,6 +296,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.45em;
   font-size: 0.8em;
   font-weight: 600;
   text-transform: uppercase;
@@ -289,6 +314,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35em;
+  flex: 1;
   min-width: 0;
 }
 .qr-view-section-caret {
@@ -298,6 +324,7 @@
   color: var(--text-faint);
 }
 .qr-view-section-count {
+  flex-shrink: 0;
   background: var(--background-modifier-border);
   padding: 0 0.5em;
   border-radius: 999px;
@@ -549,6 +576,7 @@
   padding: 0.25em 0.5em;
   cursor: pointer;
   border-radius: 4px;
+  min-width: 0;
   white-space: nowrap;
 }
 .qr-done-btn {
@@ -586,3 +614,115 @@
 }
 .qr-edit-input:focus { outline-offset: 1px; }
 .qr-edit-actions { gap: 0.35em; }
+
+@container (max-width: 360px) {
+  .qr-view {
+    padding: 0.75em 0.55em;
+  }
+
+  .qr-view-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.55em;
+  }
+
+  .qr-view-header h3 {
+    line-height: 1.15;
+  }
+
+  .qr-view-header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35em;
+    width: 100%;
+  }
+
+  .qr-view-header-actions button {
+    width: 100%;
+    padding-inline: 0.45em;
+    text-align: center;
+  }
+
+  .qr-view-add-btn {
+    grid-column: 1 / -1;
+  }
+
+  .qr-view-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .qr-view-stat {
+    min-width: 0;
+  }
+
+  .qr-task-toolbar,
+  .qr-view-dashboard .qr-task-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qr-task-search,
+  .qr-task-select,
+  .qr-view-dashboard .qr-task-filter-count {
+    grid-column: 1 / -1;
+  }
+
+  .qr-task-filter-count {
+    text-align: left;
+  }
+
+  .qr-view-section-head {
+    align-items: flex-start;
+  }
+
+  .qr-view-row {
+    padding-inline: 0.35em;
+  }
+
+  .qr-view-row-actions,
+  .qr-view-dashboard .qr-view-row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .qr-row-btn {
+    padding: 0.35em 0.4em;
+    text-align: center;
+  }
+}
+
+@container (max-width: 180px) {
+  .qr-view-header-actions,
+  .qr-view-stats,
+  .qr-view-row-actions,
+  .qr-view-dashboard .qr-view-row-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qr-view-section-head {
+    font-size: 0.76em;
+  }
+}
+
+@media (max-width: 480px) {
+  .qr-preview-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2em;
+  }
+
+  .qr-modal-actions,
+  .qr-edit-actions {
+    flex-wrap: wrap;
+  }
+
+  .qr-modal-actions button,
+  .qr-edit-actions button,
+  .qr-choice-actions button {
+    flex: 1 1 8.5em;
+    min-width: 0;
+  }
+
+  .qr-choice-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

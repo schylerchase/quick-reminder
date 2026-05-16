@@ -31,6 +31,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const tag = process.env.RELEASE_TAG || "";
+          const version = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
+          if (tag !== `v${version}`) {
+            console.error(`Release tag ${tag} does not match manifest version v${version}.`);
+            process.exit(1);
+          }
+          NODE
+
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y zip
 

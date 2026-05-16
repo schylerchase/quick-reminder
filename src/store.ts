@@ -19,7 +19,12 @@ export class ReminderStore {
     private load: () => Promise<PluginData | null>,
     private save: (data: PluginData) => Promise<void>,
   ) {
-    this.data = { reminders: [], ignoredTaskIds: [], ignoredTaskNotes: {}, settings: { ...DEFAULT_SETTINGS } };
+    this.data = {
+      reminders: [],
+      ignoredTaskIds: [],
+      ignoredTaskNotes: {},
+      settings: { ...DEFAULT_SETTINGS },
+    };
   }
 
   onChange(fn: () => void): void {
@@ -155,7 +160,9 @@ export class ReminderStore {
   }
 
   async unignoreTask(id: string): Promise<void> {
-    this.data.ignoredTaskIds = this.data.ignoredTaskIds.filter((taskId) => taskId !== id);
+    this.data.ignoredTaskIds = this.data.ignoredTaskIds.filter(
+      (taskId) => taskId !== id,
+    );
     if (this.data.ignoredTaskNotes) {
       delete this.data.ignoredTaskNotes[id];
     }
@@ -195,8 +202,11 @@ export class ReminderStore {
     }
 
     for (const reminder of this.data.reminders) {
-      if (!reminder.sourceTaskId || taskIds.has(reminder.sourceTaskId)) continue;
-      const nextTaskId = legacyIdMap.get(reminder.sourceTaskId) ?? findLegacyReminderTask(reminder, tasks)?.id;
+      if (!reminder.sourceTaskId || taskIds.has(reminder.sourceTaskId))
+        continue;
+      const nextTaskId =
+        legacyIdMap.get(reminder.sourceTaskId) ??
+        findLegacyReminderTask(reminder, tasks)?.id;
       if (!nextTaskId || nextTaskId === reminder.sourceTaskId) continue;
       reminder.sourceTaskId = nextTaskId;
       changed = true;
@@ -209,7 +219,8 @@ export class ReminderStore {
       if (!nextTaskId || nextTaskId === taskId) continue;
       this.data.ignoredTaskIds[index] = nextTaskId;
       if (this.data.ignoredTaskNotes?.[taskId] !== undefined) {
-        this.data.ignoredTaskNotes[nextTaskId] = this.data.ignoredTaskNotes[taskId];
+        this.data.ignoredTaskNotes[nextTaskId] =
+          this.data.ignoredTaskNotes[taskId];
         delete this.data.ignoredTaskNotes[taskId];
       }
       changed = true;
@@ -228,7 +239,9 @@ export class ReminderStore {
   private async persist(): Promise<void> {
     await this.save(this.data);
     if (this.data.settings.mirrorToMarkdown) {
-      await this.mirrorToMarkdown().catch((e) => console.error("mirror failed", e));
+      await this.mirrorToMarkdown().catch((e) =>
+        console.error("mirror failed", e),
+      );
     }
     this.notify();
   }
@@ -241,7 +254,7 @@ export class ReminderStore {
     });
     const existing = this.app.vault.getAbstractFileByPath(path);
     if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, body);
+      await this.app.vault.process(existing, () => body);
     } else {
       await this.app.vault.create(path, body);
     }
@@ -252,7 +265,8 @@ export class ReminderStore {
     const currentPath = normalizePath(this.data.settings.mirrorFilePath || "");
     const legacyPath = normalizePath(LEGACY_MIRROR_FILE_PATH);
     const defaultPath = normalizePath(DEFAULT_MIRROR_FILE_PATH);
-    const usesDefaultMirror = !currentPath || currentPath === legacyPath || currentPath === defaultPath;
+    const usesDefaultMirror =
+      !currentPath || currentPath === legacyPath || currentPath === defaultPath;
 
     if (!currentPath || currentPath === legacyPath) {
       this.data.settings.mirrorFilePath = defaultPath;
@@ -263,27 +277,41 @@ export class ReminderStore {
 
     const legacyFile = this.app.vault.getAbstractFileByPath(legacyPath);
     const targetFile = this.app.vault.getAbstractFileByPath(defaultPath);
-    if (usesDefaultMirror && legacyFile instanceof TFile && !(targetFile instanceof TFile)) {
+    if (
+      usesDefaultMirror &&
+      legacyFile instanceof TFile &&
+      !(targetFile instanceof TFile)
+    ) {
       await this.moveLegacyMirrorFile(legacyFile, defaultPath);
-    } else if (usesDefaultMirror && legacyFile instanceof TFile && targetFile instanceof TFile) {
+    } else if (
+      usesDefaultMirror &&
+      legacyFile instanceof TFile &&
+      targetFile instanceof TFile
+    ) {
       await this.removeGeneratedLegacyMirror(legacyFile);
     }
 
     return changed;
   }
 
-  private async moveLegacyMirrorFile(legacyFile: TFile, targetPath: string): Promise<void> {
+  private async moveLegacyMirrorFile(
+    legacyFile: TFile,
+    targetPath: string,
+  ): Promise<void> {
     try {
       await this.app.vault.rename(legacyFile, targetPath);
       return;
     } catch (error) {
-      console.warn("Quick Reminder could not rename legacy Reminders.md; copying instead", error);
+      console.warn(
+        "Quick Reminder could not rename legacy Reminders.md; copying instead",
+        error,
+      );
     }
 
     const body = await this.app.vault.read(legacyFile);
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, body);
+      await this.app.vault.process(existing, () => body);
     } else {
       await this.app.vault.create(targetPath, body);
     }
@@ -292,7 +320,11 @@ export class ReminderStore {
 
   private async removeGeneratedLegacyMirror(legacyFile: TFile): Promise<void> {
     const body = await this.app.vault.read(legacyFile);
-    if (!body.includes("_Auto-generated by Quick Reminder plugin. Do not edit directly._")) {
+    if (
+      !body.includes(
+        "_Auto-generated by Quick Reminder plugin. Do not edit directly._",
+      )
+    ) {
       return;
     }
     await this.app.vault.trash(legacyFile, true).catch(async () => {
@@ -313,7 +345,12 @@ export class ReminderStore {
   }
 
   private renderMarkdown(): string {
-    const lines: string[] = ["# Reminders", "", "_Auto-generated by Quick Reminder plugin. Do not edit directly._", ""];
+    const lines: string[] = [
+      "# Reminders",
+      "",
+      "_Auto-generated by Quick Reminder plugin. Do not edit directly._",
+      "",
+    ];
     const pending = this.pending;
     const done = this.all.filter((r) => r.notified);
 
@@ -352,23 +389,36 @@ function formatDate(ms: number): string {
   });
 }
 
-function findLegacyReminderTask(reminder: Reminder, tasks: ScrapedTask[]): ScrapedTask | null {
+function findLegacyReminderTask(
+  reminder: Reminder,
+  tasks: ScrapedTask[],
+): ScrapedTask | null {
   if (!reminder.sourceTaskId) return null;
   const legacy = parseLegacyTaskId(reminder.sourceTaskId);
   if (!legacy) return null;
   const reminderText = normalizeIdentityText(reminder.text);
-  return tasks.find((task) => {
-    if (task.filePath !== legacy.filePath) return false;
-    const taskText = normalizeIdentityText(task.text);
-    const legacyText = normalizeIdentityText(legacy.text ?? "");
-    return (reminderText !== "" && taskText.includes(reminderText))
-      || (legacyText !== "" && taskText.includes(legacyText));
-  }) ?? null;
+  return (
+    tasks.find((task) => {
+      if (task.filePath !== legacy.filePath) return false;
+      const taskText = normalizeIdentityText(task.text);
+      const legacyText = normalizeIdentityText(legacy.text ?? "");
+      return (
+        (reminderText !== "" && taskText.includes(reminderText)) ||
+        (legacyText !== "" && taskText.includes(legacyText))
+      );
+    }) ?? null
+  );
 }
 
-function parseLegacyTaskId(id: string): { filePath: string; text: string | null } | null {
-  const match = id.match(/^(?<filePath>.+):(?<line>\d+):(?<kind>checkbox|TODO|FIXME|TASK)(?::(?<text>.*))?$/);
-  return match?.groups ? { filePath: match.groups.filePath, text: match.groups.text ?? null } : null;
+function parseLegacyTaskId(
+  id: string,
+): { filePath: string; text: string | null } | null {
+  const match = id.match(
+    /^(?<filePath>.+):(?<line>\d+):(?<kind>checkbox|TODO|FIXME|TASK)(?::(?<text>.*))?$/,
+  );
+  return match?.groups
+    ? { filePath: match.groups.filePath, text: match.groups.text ?? null }
+    : null;
 }
 
 function normalizeIdentityText(text: string): string {

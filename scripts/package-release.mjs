@@ -10,6 +10,7 @@ const releaseDir = join(root, "dist", "release");
 const releaseFiles = [
   "main.js",
   "manifest.json",
+  "versions.json",
   "styles.css",
   "installers/install-macos.command",
   "installers/install-windows.ps1",
@@ -25,13 +26,29 @@ for (const file of releaseFiles) {
 
 await chmod(join(releaseDir, "install-macos.command"), 0o755);
 
-const zip = spawnSync("zip", ["-r", "../quick-reminder.zip", "."], {
-  cwd: releaseDir,
-  stdio: "inherit",
-});
-
-if (zip.error || zip.status !== 0) {
-  console.warn("zip was not available; release files were still written.");
+if (!createZip()) {
+  console.warn("zip/Compress-Archive was not available; release files were still written.");
 }
 
 console.log(`Release files ready in ${releaseDir}`);
+
+function createZip() {
+  const zip = spawnSync("zip", ["-r", "../quick-reminder.zip", "."], {
+    cwd: releaseDir,
+    stdio: "inherit",
+  });
+  if (!zip.error && zip.status === 0) return true;
+
+  if (process.platform !== "win32") return false;
+
+  const powershell = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "Compress-Archive -Path * -DestinationPath ..\\quick-reminder.zip -Force",
+    ],
+    { cwd: releaseDir, stdio: "inherit" },
+  );
+  return !powershell.error && powershell.status === 0;
+}

@@ -14,7 +14,21 @@ Natural-language task capture with native OS notifications for Obsidian. Built b
 
 ## Install
 
-### For friends
+### Recommended: install with BRAT
+
+For beta installs from GitHub, use [BRAT](https://github.com/TfTHacker/obsidian42-brat).
+
+1. In Obsidian, install and enable **BRAT** from Community plugins.
+2. Run **BRAT: Add a beta plugin for testing** from the command palette.
+3. Enter:
+   ```text
+   https://github.com/schylerchase/quick-reminder
+   ```
+4. Enable **Quick Reminder** in **Settings -> Community plugins**.
+
+BRAT will install the latest GitHub release into the current vault and can check for updates later.
+
+### Installer zip
 
 1. Download `quick-reminder.zip` from the latest GitHub release.
 2. Unzip it.
@@ -35,7 +49,9 @@ cp main.js manifest.json styles.css /path/to/your/vault/.obsidian/plugins/quick-
 
 ### Updates
 
-Quick Reminder checks GitHub releases on launch and shows a notice when a newer release exists.
+If installed with BRAT, use **BRAT: Check for updates to beta plugins and UPDATE**. BRAT can also check beta plugins at Obsidian startup.
+
+Quick Reminder also checks GitHub releases on launch and shows a notice when a newer release exists.
 
 To update manually inside Obsidian:
 
@@ -216,6 +232,7 @@ src/
 4. GitHub Actions publishes a release containing:
    - `main.js`
    - `manifest.json`
+   - `versions.json`
    - `styles.css`
    - `quick-reminder.zip`
    - macOS and Windows installer scripts
