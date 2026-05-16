@@ -58,7 +58,6 @@ export interface Settings {
   defaultSnoozeMinutes: number;
   fireMissedOnLaunch: boolean;
   soundOnNotify: boolean;
-  checkForUpdatesOnLaunch: boolean;
   autoRevealActiveFile: boolean;
   tasksIntegrationEnabled: boolean;
   taskSectionHeadings: string[];
@@ -73,7 +72,6 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultSnoozeMinutes: 10,
   fireMissedOnLaunch: true,
   soundOnNotify: true,
-  checkForUpdatesOnLaunch: true,
   autoRevealActiveFile: true,
   tasksIntegrationEnabled: true,
   taskSectionHeadings: ["In Progress", "To Do", "Completed"],

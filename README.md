@@ -1,6 +1,8 @@
 # Quick Reminder
 
-Natural-language task capture with native OS notifications for Obsidian. Built because the Tasks plugin is syntax-heavy and Outlook reminders are unreliable.
+Natural-language reminders with native OS notifications for Obsidian. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
+
+This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, native notifications, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder will optionally call its task editor when you create a task reminder from the editor.
 
 ## What it does
 
@@ -51,13 +53,7 @@ cp main.js manifest.json styles.css /path/to/your/vault/.obsidian/plugins/quick-
 
 If installed with BRAT, use **BRAT: Check for updates to beta plugins and UPDATE**. BRAT can also check beta plugins at Obsidian startup.
 
-Quick Reminder also checks GitHub releases on launch and shows a notice when a newer release exists.
-
-To update manually inside Obsidian:
-
-1. Open the command palette.
-2. Run **Quick Reminder: Update from latest GitHub release**.
-3. Reload the plugin after the update completes.
+If installed manually, replace `main.js`, `manifest.json`, and `styles.css` in the plugin folder, then reload the plugin from **Settings -> Community plugins**.
 
 ## Usage
 
@@ -203,6 +199,11 @@ Auto-insert only runs for empty new markdown notes inside those configured folde
 
 If no time phrase is detected, the modal warns you. Add something like `in 30 minutes` or `tomorrow 9am`.
 
+## Integrations
+
+- **Tasks plugin (optional).** If the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) is installed and enabled, Quick Reminder will open its task-editor modal when you create a task reminder from the editor. If it is missing or disabled, Quick Reminder falls back to its own capture modal. Toggle this under **Settings -> Quick Reminder -> Tasks plugin integration**.
+- **KB Manager (optional).** If you install the companion [KB Manager](https://github.com/schylerchase/kb-manager) plugin, KB Manager can route its "review this KB area" reminders into Quick Reminder when it is available. When Quick Reminder is missing or disabled, KB Manager writes a plain Markdown review task to a configured note instead. Quick Reminder itself never depends on KB Manager.
+
 ## Architecture
 
 ```text
@@ -214,7 +215,7 @@ src/
   store.ts       # Plugin data persistence + Reminders.md mirror
   taskScanner.ts # Vault Markdown task/TODO scanner
   types.ts       # Shared types + defaults
-  updater.ts     # GitHub release update installer
+  view.ts        # Reminder manager + task dashboard sidebar view
 ```
 
 ## Release process
@@ -237,7 +238,7 @@ src/
    - `quick-reminder.zip`
    - macOS and Windows installer scripts
 
-The in-plugin updater downloads `main.js`, `manifest.json`, and `styles.css` from the latest GitHub release.
+The plugin does not include an in-app self-updater. Updates are installed by BRAT or by replacing `main.js`, `manifest.json`, and `styles.css` in the vault's plugin folder.
 
 ## Known limits
 

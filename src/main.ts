@@ -17,16 +17,13 @@ import { QuickCaptureModal, ReminderListModal } from "./modal";
 import { DEFAULT_MIRROR_FILE_PATH, PluginData, Reminder } from "./types";
 import { parseReminder } from "./parser";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
-import { NoPublicReleaseError, PluginUpdater } from "./updater";
 import { buildCheckboxTaskId, TaskScanner } from "./taskScanner";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
   scheduler!: Scheduler;
-  updater!: PluginUpdater;
   taskScanner!: TaskScanner;
   private selectedTaskFolderPath: string | null = null;
-  private updateCheckInFlight = false;
 
   async onload(): Promise<void> {
     this.store = new ReminderStore(
@@ -37,7 +34,6 @@ export default class QuickReminderPlugin extends Plugin {
       },
     );
     await this.store.init();
-    this.updater = new PluginUpdater(this.app, this.manifest);
     this.taskScanner = new TaskScanner(this.app);
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
@@ -93,14 +89,6 @@ export default class QuickReminderPlugin extends Plugin {
       name: "Reveal active file in file explorer",
       callback: () => {
         void this.revealActiveFileInExplorer(true);
-      },
-    });
-
-    this.addCommand({
-      id: "update-from-github",
-      name: "Update from latest GitHub release",
-      callback: () => {
-        void this.installLatestRelease();
       },
     });
 
@@ -179,7 +167,6 @@ export default class QuickReminderPlugin extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.scheduler.scanOverdue();
       this.scheduler.scheduleAll();
-      void this.notifyIfUpdateAvailable();
       void this.revealActiveFileInExplorer(false);
     });
 
@@ -506,55 +493,6 @@ export default class QuickReminderPlugin extends Plugin {
       document.querySelectorAll<HTMLElement>(".qr-selected-task-folder"),
     )) {
       el.removeClass("qr-selected-task-folder");
-    }
-  }
-
-  async installLatestRelease(): Promise<void> {
-    if (this.updateCheckInFlight) {
-      new Notice("Quick Reminder is already checking for updates.");
-      return;
-    }
-    this.updateCheckInFlight = true;
-    new Notice("Checking Quick Reminder releases...");
-    try {
-      const result = await this.updater.installLatest();
-      if (!result.hasUpdate) {
-        new Notice(
-          `Quick Reminder is already current (${result.currentVersion}).`,
-        );
-        return;
-      }
-
-      new Notice(
-        `Quick Reminder ${result.latestVersion} installed. Reload the plugin to finish.`,
-        10_000,
-      );
-    } catch (error) {
-      console.error("Quick Reminder update failed", error);
-      new Notice(getUpdateErrorMessage(error), 10_000);
-    } finally {
-      this.updateCheckInFlight = false;
-    }
-  }
-
-  private async notifyIfUpdateAvailable(): Promise<void> {
-    if (
-      !this.store.settings.checkForUpdatesOnLaunch ||
-      this.updateCheckInFlight
-    )
-      return;
-    this.updateCheckInFlight = true;
-    try {
-      const result = await this.updater.check();
-      if (!result.hasUpdate) return;
-      new Notice(
-        `Quick Reminder ${result.latestVersion} is available. Run "Quick Reminder: Update from latest GitHub release".`,
-        12_000,
-      );
-    } catch (error) {
-      console.warn("Quick Reminder update check failed", error);
-    } finally {
-      this.updateCheckInFlight = false;
     }
   }
 
@@ -887,17 +825,6 @@ async function revealFileInExplorer(app: App, file: unknown): Promise<boolean> {
   );
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function getUpdateErrorMessage(error: unknown): string {
-  if (error instanceof NoPublicReleaseError) {
-    return "No public Quick Reminder release found. Publish a GitHub release and make the repo public for in-app updates.";
-  }
-  return `Quick Reminder update failed: ${getErrorMessage(error)}`;
-}
-
 function cleanMarkdownTaskLine(value: string): string {
   return value
     .replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX-]\]\s+/, "")
@@ -1092,19 +1019,6 @@ class QuickReminderSettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl)
-      .setName("Check for updates on launch")
-      .setDesc("Show a notice when a newer GitHub release is available.")
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.store.settings.checkForUpdatesOnLaunch)
-          .onChange(async (v) => {
-            await this.plugin.store.updateSettings({
-              checkForUpdatesOnLaunch: v,
-            });
-          }),
-      );
-
-    new Setting(containerEl)
       .setName("Reveal active file in file explorer")
       .setDesc(
         "Automatically expand and highlight the active note in the Files pane when you switch files.",
@@ -1215,15 +1129,5 @@ class QuickReminderSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
-      .setName("Plugin updates")
-      .setDesc(
-        `Install the latest release from ${this.plugin.updater.getRepositoryUrl()}. Reload the plugin after updating.`,
-      )
-      .addButton((button) =>
-        button.setButtonText("Install latest").onClick(async () => {
-          await this.plugin.installLatestRelease();
-        }),
-      );
   }
 }
