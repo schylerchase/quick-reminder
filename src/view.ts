@@ -25,6 +25,7 @@ import { saveScheduledReminder } from "./reminderTransaction";
 import { QuickCaptureModal } from "./modal";
 import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
+import { openMainViewLeaf } from "./workspace";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
 type ReminderViewState = {
@@ -1218,27 +1219,15 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    const noteLeaf = this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf();
-    if (!noteLeaf) {
+    const managerLeaf = await openMainViewLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
+    if (!managerLeaf) {
       new Notice("Quick Reminder could not find a note pane.");
       return;
     }
 
-    await noteLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
-    await noteLeaf.loadIfDeferred();
-    this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
-    const noteTab = this.app.workspace.getLeaf("tab");
-    await noteTab.openFile(file, { active: false });
-
-    const managerLeaf = noteLeaf;
-    await managerLeaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
-    await managerLeaf.loadIfDeferred();
     if (managerLeaf.view instanceof ReminderView) {
       managerLeaf.view.showActiveFile(file.path, file.parent?.path ?? "");
     }
-    this.app.workspace.rightSplit.collapse();
-    await this.app.workspace.revealLeaf(managerLeaf);
-    this.app.workspace.setActiveLeaf(managerLeaf, { focus: true });
     this.closeMainManagerLeaves(managerLeaf);
   }
 

@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 
 const testEntries = [
+  "tests/dashboard.test.ts",
   "tests/parser.test.ts",
   "tests/scheduler.test.ts",
   "tests/store.test.ts",
