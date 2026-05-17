@@ -17,6 +17,13 @@ export class Notice {
 
 export class TFile {}
 
+export const Platform = {
+  isMobileApp: false,
+  isDesktopApp: true,
+  isMobile: false,
+  isDesktop: true,
+};
+
 export function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/");
 }

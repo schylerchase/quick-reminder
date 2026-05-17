@@ -16,14 +16,42 @@ import { Scheduler } from "./scheduler";
 import { QuickCaptureModal, ReminderListModal } from "./modal";
 import { DEFAULT_MIRROR_FILE_PATH, PluginData, Reminder } from "./types";
 import { parseReminder } from "./parser";
+import { saveScheduledReminder } from "./reminderTransaction";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
-import { buildCheckboxTaskId, TaskScanner } from "./taskScanner";
+import {
+  buildCheckboxTaskId,
+  extractCheckboxTaskText,
+  TaskScanner,
+} from "./taskScanner";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
   scheduler!: Scheduler;
   taskScanner!: TaskScanner;
   private selectedTaskFolderPath: string | null = null;
+  /** True after onunload; guards async onLayoutReady callbacks. */
+  private isUnloaded = false;
+  /**
+   * Subscribers (currently the ReminderView) that want to know when an
+   * internal taskScanner write is about to fire — used to suppress the
+   * resulting "modify" event without a fragile time-window.
+   */
+  private selfModifySubscribers: Set<(path: string) => void> = new Set();
+
+  registerSelfModifySubscriber(fn: (path: string) => void): () => void {
+    this.selfModifySubscribers.add(fn);
+    return () => this.selfModifySubscribers.delete(fn);
+  }
+
+  private notifySelfModify = (path: string): void => {
+    for (const fn of this.selfModifySubscribers) {
+      try {
+        fn(path);
+      } catch (err) {
+        console.error("Quick Reminder self-modify subscriber failed", err);
+      }
+    }
+  };
 
   async onload(): Promise<void> {
     this.store = new ReminderStore(
@@ -34,14 +62,20 @@ export default class QuickReminderPlugin extends Plugin {
       },
     );
     await this.store.init();
-    this.taskScanner = new TaskScanner(this.app);
+    this.taskScanner = new TaskScanner(this.app, this.notifySelfModify);
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
     });
     this.registerView(
       VIEW_TYPE_REMINDER,
       (leaf) =>
-        new ReminderView(leaf, this.store, this.scheduler, this.taskScanner),
+        new ReminderView(
+          leaf,
+          this.store,
+          this.scheduler,
+          this.taskScanner,
+          (fn) => this.registerSelfModifySubscriber(fn),
+        ),
     );
     this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
       void this.activateView();
@@ -165,7 +199,12 @@ export default class QuickReminderPlugin extends Plugin {
     this.addSettingTab(new QuickReminderSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(async () => {
+      // Plugin could have been disabled while Obsidian was still loading
+      // a large vault. Bail out so we don't schedule timers on a dead
+      // scheduler instance or fire notifications for a disabled plugin.
+      if (this.isUnloaded) return;
       await this.scheduler.scanOverdue();
+      if (this.isUnloaded) return;
       this.scheduler.scheduleAll();
       void this.revealActiveFileInExplorer(false);
     });
@@ -231,6 +270,7 @@ export default class QuickReminderPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.isUnloaded = true;
     this.scheduler?.cancelAll();
   }
 
@@ -525,10 +565,20 @@ export default class QuickReminderPlugin extends Plugin {
       notified: false,
     };
 
-    await this.store.add(reminder);
-    this.scheduler.schedule(reminder);
-
-    editor.replaceSelection(toReminderMarkdown(selection, reminder.dueAt));
+    try {
+      await saveScheduledReminder(
+        this.store,
+        this.scheduler,
+        reminder,
+        () => editor.replaceSelection(toReminderMarkdown(selection, reminder.dueAt)),
+        (rollbackErr) =>
+          console.error("Quick Reminder selection rollback failed", rollbackErr),
+      );
+    } catch (err) {
+      console.error("Quick Reminder selection reminder failed", err);
+      new Notice("Quick Reminder: could not save reminder - see console");
+      return;
+    }
 
     new Notice(
       `Reminder: ${reminder.text} - ${new Date(reminder.dueAt).toLocaleString()}`,
@@ -564,6 +614,20 @@ export default class QuickReminderPlugin extends Plugin {
       async (reminder, rawInput) => {
         const line = toTaskLine(toReminderMarkdown(rawInput, reminder.dueAt));
         this.insertTaskLine(editor, line);
+        // Re-read view.file at INSERT time, not modal-open time: the user
+        // can switch files between open and save, and the editor follows
+        // the view's current file. Snapshotting earlier would link the
+        // reminder to file A while the task lands in file B.
+        const filePath = view.file?.path ?? null;
+        if (filePath) {
+          const checkboxText = extractCheckboxTaskText(line);
+          if (checkboxText !== null) {
+            await this.store.setReminderSourceTaskId(
+              reminder.id,
+              buildCheckboxTaskId(filePath, checkboxText),
+            );
+          }
+        }
         await this.activateView(false);
       },
       false,
@@ -640,14 +704,16 @@ export default class QuickReminderPlugin extends Plugin {
       notified: false,
     };
     if (filePath) {
-      reminder.sourceTaskId = buildCheckboxTaskId(
-        filePath,
-        cleanMarkdownTaskLine(line),
-      );
+      // Build the id from the raw checkbox text (same normalization the
+      // scanner uses) so the next scan recognizes this task and shows the
+      // "added" badge / blocks duplicate reminder creation.
+      const checkboxText = extractCheckboxTaskText(line);
+      if (checkboxText !== null) {
+        reminder.sourceTaskId = buildCheckboxTaskId(filePath, checkboxText);
+      }
     }
 
-    await this.store.add(reminder);
-    this.scheduler.schedule(reminder);
+    await saveScheduledReminder(this.store, this.scheduler, reminder);
     new Notice(`Task reminder added: ${reminder.text}`);
   }
 

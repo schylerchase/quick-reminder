@@ -3,12 +3,15 @@ import { parseReminder } from "./parser";
 import { Reminder } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
+import { saveScheduledReminder } from "./reminderTransaction";
 
 export class QuickCaptureModal extends Modal {
   private inputEl!: HTMLInputElement;
   private previewEl!: HTMLDivElement;
   private saveButtonEl!: HTMLButtonElement;
   private currentParse = parseReminder("");
+  private isSaving = false;
+  private isClosed = false;
 
   constructor(
     app: App,
@@ -39,7 +42,10 @@ export class QuickCaptureModal extends Modal {
 
     this.inputEl = field.createEl("input", {
       type: "text",
-      attr: { id: "qr-reminder-input" },
+      // chrono-node is expensive on every keystroke; cap input so a pasted
+      // adversarial string (catastrophic backtracking patterns) can't stall
+      // the UI on mobile.
+      attr: { id: "qr-reminder-input", maxlength: "500" },
       placeholder: "e.g. call mom tomorrow at 3pm",
       cls: "qr-input",
     });
@@ -83,6 +89,7 @@ export class QuickCaptureModal extends Modal {
   }
 
   onClose(): void {
+    this.isClosed = true;
     this.contentEl.empty();
   }
 
@@ -140,6 +147,10 @@ export class QuickCaptureModal extends Modal {
   }
 
   private async save(): Promise<void> {
+    // Re-entry guard: a fast Enter+click or double-click could otherwise
+    // create two reminders with different IDs from one user action.
+    if (this.isSaving || this.isClosed) return;
+
     const { text, dueAt } = this.currentParse;
 
     if (!text) {
@@ -155,10 +166,16 @@ export class QuickCaptureModal extends Modal {
       return;
     }
 
+    // Snapshot the raw input before the await — onClose() empties the DOM
+    // and detaches inputEl, so reading .value later is unreliable.
+    const rawInput = this.inputEl.value;
+    this.isSaving = true;
+    if (this.saveButtonEl) this.saveButtonEl.disabled = true;
+
     const reminder: Reminder = {
       id: genId(),
       text,
-      rawInput: this.inputEl.value,
+      rawInput,
       dueAt,
       createdAt: Date.now(),
       notified: false,
@@ -167,12 +184,23 @@ export class QuickCaptureModal extends Modal {
       reminder.sourceTaskId = this.sourceTaskId;
     }
 
-    await this.store.add(reminder);
-    this.scheduler.schedule(reminder);
-    await this.onSaveReminder?.(reminder, this.inputEl.value);
-
-    new Notice(`Reminder set: ${text} - ${formatDateTime(dueAt)}`);
-    this.close();
+    try {
+      await saveScheduledReminder(
+        this.store,
+        this.scheduler,
+        reminder,
+        () => this.onSaveReminder?.(reminder, rawInput),
+        (rollbackErr) => console.error("Quick Reminder rollback failed", rollbackErr),
+      );
+      new Notice(`Reminder set: ${text} - ${formatDateTime(dueAt)}`);
+      this.close();
+    } catch (err) {
+      console.error("Quick Reminder save failed", err);
+      new Notice("Quick Reminder: could not save reminder - see console");
+      if (this.saveButtonEl) this.saveButtonEl.disabled = false;
+    } finally {
+      this.isSaving = false;
+    }
   }
 }
 

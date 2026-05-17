@@ -31,7 +31,11 @@ export function parseReminder(input: string, ref: Date = new Date()): ParseResul
 }
 
 function stripMatchedPhrase(input: string, phrase: string): string {
-  const connectors = /\s*(?:,|at|on|by|in|next|this|\s)+\s*$/i;
+  // Word-boundary anchors on each alternative so we don't chew the tail of
+  // legitimate words: previously "Marvin tomorrow" -> "Marv", "begin tomorrow"
+  // -> "beg", "Burton tomorrow" -> "Burt". Now only whole-word connectors
+  // get stripped.
+  const connectors = /(?:\s+(?:,|\b(?:at|on|by|in|next|this)\b))+\s*$/i;
   const cleaned = input.replace(phrase, "").replace(/\s+/g, " ").trim();
   return cleaned.replace(connectors, "").trim();
 }

@@ -1,6 +1,6 @@
 {
   "name": "obsidian-quick-reminder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Natural-language task capture with native OS notifications for Obsidian.",
   "main": "main.js",
   "scripts": {

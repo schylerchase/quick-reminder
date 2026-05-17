@@ -21,6 +21,7 @@ import {
 } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
+import { saveScheduledReminder } from "./reminderTransaction";
 import { QuickCaptureModal } from "./modal";
 import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
@@ -54,7 +55,16 @@ export class ReminderView extends ItemView {
   private taskSort: TaskDashboardSort = "page";
   private fileOpenRef: EventRef | null = null;
   private scanDebounceHandle: number | null = null;
-  private organizingTaskPaths = new Set<string>();
+  /** Per-path in-flight organize promise so callers can await completion. */
+  private organizingPromises = new Map<string, Promise<void>>();
+  /**
+   * Counts pending self-modify events per path. TaskScanner notifies the
+   * plugin BEFORE each vault.process; the plugin forwards here. The next
+   * modify event for that path decrements and is skipped — replacing the
+   * fragile 800ms time-window suppression that could swallow real user edits.
+   */
+  private expectedSelfModifies: Map<string, number> = new Map();
+  private unsubscribeSelfModify: (() => void) | null = null;
   private highlightedTaskId: string | null = null;
   private highlightTimeoutHandle: number | null = null;
 
@@ -63,6 +73,14 @@ export class ReminderView extends ItemView {
     private store: ReminderStore,
     private scheduler: Scheduler,
     private taskScanner: TaskScanner,
+    /**
+     * Subscribe to TaskScanner self-modify notifications. Returns an
+     * unsubscribe function. Defaults to a no-op so callers/tests that
+     * don't need the suppression behavior still construct cleanly.
+     */
+    private subscribeToSelfModifies: (
+      fn: (path: string) => void,
+    ) => () => void = () => () => {},
   ) {
     super(leaf);
   }
@@ -81,6 +99,12 @@ export class ReminderView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.store.onChange(this.refreshHandler);
+    this.unsubscribeSelfModify = this.subscribeToSelfModifies((path) => {
+      this.expectedSelfModifies.set(
+        path,
+        (this.expectedSelfModifies.get(path) ?? 0) + 1,
+      );
+    });
     this.applyDashboardState(this.store.settings.taskDashboardState);
     this.captureActiveMarkdownContext();
     this.ensureUsableDefaultScope();
@@ -117,6 +141,9 @@ export class ReminderView extends ItemView {
 
   async onClose(): Promise<void> {
     this.store.offChange(this.refreshHandler);
+    this.unsubscribeSelfModify?.();
+    this.unsubscribeSelfModify = null;
+    this.expectedSelfModifies.clear();
     if (this.fileOpenRef) {
       this.app.workspace.offref(this.fileOpenRef);
       this.fileOpenRef = null;
@@ -128,6 +155,10 @@ export class ReminderView extends ItemView {
     if (this.highlightTimeoutHandle !== null) {
       window.clearTimeout(this.highlightTimeoutHandle);
       this.highlightTimeoutHandle = null;
+    }
+    if (this.dashboardStateDebounceHandle !== null) {
+      window.clearTimeout(this.dashboardStateDebounceHandle);
+      this.dashboardStateDebounceHandle = null;
     }
   }
 
@@ -212,39 +243,73 @@ export class ReminderView extends ItemView {
     this.renderSection(container as HTMLElement, "History", done, true);
   }
 
+  private scrapedTasksRefresh: Promise<void> | null = null;
+
   private async refreshScrapedTasks(): Promise<void> {
-    this.isScanningTasks = true;
-    try {
-      this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
-      await this.store.relinkTaskReferences(this.scrapedTasks);
-      this.hasScannedTasks = true;
-    } catch (error) {
-      console.error("Quick Reminder task scan failed", error);
-      new Notice("Quick Reminder could not scan vault tasks.");
-    } finally {
-      this.isScanningTasks = false;
-    }
+    // Coalesce concurrent callers (vault events, scan button, render bootstrap)
+    // onto a single in-flight scan. Without this, two scans race against
+    // store.relinkTaskReferences mutating data.reminders in place.
+    if (this.scrapedTasksRefresh) return this.scrapedTasksRefresh;
+    this.scrapedTasksRefresh = (async () => {
+      this.isScanningTasks = true;
+      try {
+        this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
+        await this.store.relinkTaskReferences(this.scrapedTasks);
+        this.hasScannedTasks = true;
+      } catch (error) {
+        console.error("Quick Reminder task scan failed", error);
+        new Notice("Quick Reminder could not scan vault tasks.");
+      } finally {
+        this.isScanningTasks = false;
+        this.scrapedTasksRefresh = null;
+      }
+    })();
+    return this.scrapedTasksRefresh;
   }
 
   private queueTaskRefreshForFile(file: TAbstractFile): void {
-    if (this.shouldRefreshForVaultFile(file)) {
-      void this.organizeAndRefreshTasks(file as TFile);
-    }
-  }
-
-  private async organizeAndRefreshTasks(file: TFile): Promise<void> {
-    if (this.organizingTaskPaths.has(file.path)) {
+    if (!this.shouldRefreshForVaultFile(file)) return;
+    // Suppress exactly one modify event per pending self-write. Replaces
+    // the prior 800ms time-window heuristic which could swallow real user
+    // edits typed within that window (e.g. manual `[-]` cancellation).
+    const path = (file as TFile).path;
+    const remaining = this.expectedSelfModifies.get(path) ?? 0;
+    if (remaining > 0) {
+      if (remaining === 1) this.expectedSelfModifies.delete(path);
+      else this.expectedSelfModifies.set(path, remaining - 1);
+      // Our self-writes already placed lines in the right section, so we
+      // just need the dashboard to re-render with the new file content.
       this.queueTaskRefresh();
       return;
     }
+    void this.organizeAndRefreshTasks(file as TFile);
+  }
 
-    this.organizingTaskPaths.add(file.path);
+  private async organizeAndRefreshTasks(file: TFile): Promise<void> {
+    // If an organize is already running for this path (user edit landed
+    // mid-organize), share its promise rather than running concurrent
+    // vault.process calls that would stomp each other's intermediate state.
+    const inFlight = this.organizingPromises.get(file.path);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const promise = (async () => {
+      try {
+        await this.taskScanner.organizeTopLevelTaskSections(
+          file.path,
+          this.store.settings.taskSectionHeadings,
+        );
+      } catch (error) {
+        console.error("Quick Reminder task auto-organization failed", error);
+      }
+    })();
+    this.organizingPromises.set(file.path, promise);
     try {
-      await this.taskScanner.organizeTopLevelTaskSections(file.path);
-    } catch (error) {
-      console.error("Quick Reminder task auto-organization failed", error);
+      await promise;
     } finally {
-      this.organizingTaskPaths.delete(file.path);
+      this.organizingPromises.delete(file.path);
       this.queueTaskRefresh();
     }
   }
@@ -262,7 +327,6 @@ export class ReminderView extends ItemView {
     if (this.scanDebounceHandle !== null) {
       window.clearTimeout(this.scanDebounceHandle);
     }
-
     this.scanDebounceHandle = window.setTimeout(async () => {
       this.scanDebounceHandle = null;
       await this.refreshScrapedTasks();
@@ -448,8 +512,13 @@ export class ReminderView extends ItemView {
     scopeSelect.createEl("option", { text: "Whole vault", value: "vault" });
     scopeSelect.value = this.taskScope;
     scopeSelect.onchange = () => {
-      this.taskScope = scopeSelect.value as TaskDashboardScope;
-      this.selectedFolderPath = null;
+      const next = scopeSelect.value as TaskDashboardScope;
+      // Only forget the user's explicit folder pick when they leave folder
+      // scope. Previously every scope change wiped it, so flipping to
+      // "Current folder" silently dropped a folder the user opened via
+      // "Show folder tasks in Quick Reminder".
+      if (next !== "folder") this.selectedFolderPath = null;
+      this.taskScope = next;
       void this.persistDashboardState();
       void this.render(true);
     };
@@ -672,9 +741,17 @@ export class ReminderView extends ItemView {
         await this.updateTaskStatus(task, task.completed ? "todo" : "completed", task.completed ? "Task marked to do" : "Task marked done");
       };
 
-      actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
-        await this.editWithTasksPlugin(task);
-      };
+      // Only render Edit when Tasks integration is enabled AND available —
+      // otherwise the button would either pop the Tasks modal the user
+      // opted out of, or show a "not available" error on every click.
+      if (
+        this.store.settings.tasksIntegrationEnabled &&
+        getTasksPluginApi(this.app) !== null
+      ) {
+        actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
+          await this.editWithTasksPlugin(task);
+        };
+      }
     }
 
     this.addScrapedRowContextMenu(row, task, isIgnored);
@@ -727,8 +804,7 @@ export class ReminderView extends ItemView {
         notified: false,
         sourceTaskId: task.id,
       };
-      await this.store.add(reminder);
-      this.scheduler.schedule(reminder);
+      await saveScheduledReminder(this.store, this.scheduler, reminder);
       new Notice(`Reminder added from ${task.filePath}:${task.line}`);
     };
   }
@@ -904,8 +980,7 @@ export class ReminderView extends ItemView {
         notified: false,
         sourceTaskId: task.id,
       };
-      await this.store.add(reminder);
-      this.scheduler.schedule(reminder);
+      await saveScheduledReminder(this.store, this.scheduler, reminder);
     }
 
     await this.refreshScrapedTasks();
@@ -997,7 +1072,12 @@ export class ReminderView extends ItemView {
   }
 
   private async editWithTasksPlugin(task: ScrapedTask): Promise<void> {
-    const api = getTasksPluginApi(this.app);
+    // Respect the user's "Tasks plugin integration" toggle — without this
+    // check the dashboard Edit button still pops Tasks's modal even when
+    // the user opted out in settings.
+    const api = this.store.settings.tasksIntegrationEnabled
+      ? getTasksPluginApi(this.app)
+      : null;
     if (!api) {
       new Notice("Tasks plugin API is not available. Reload or enable Tasks.");
       return;
@@ -1045,9 +1125,9 @@ export class ReminderView extends ItemView {
   private getFilteredScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
     const query = this.taskSearch.trim().toLowerCase();
     return tasks.filter((task) => {
-      if (task.status === "cancelled") {
-        return false;
-      }
+      // Previously cancelled tasks were dropped entirely — the user had no
+      // way to find or un-cancel them from the dashboard. Show them with
+      // their cancelled badge instead; users can toggle status from the row.
       if (this.sourceFilter !== "all" && task.kind !== this.sourceFilter) {
         return false;
       }
@@ -1266,18 +1346,30 @@ export class ReminderView extends ItemView {
     }
   }
 
-  private async persistDashboardState(): Promise<void> {
-    await this.store.updateSettings({
-      taskDashboardState: {
-        scope: this.taskScope,
-        selectedFolderPath: this.selectedFolderPath,
-        lastMarkdownPath: this.lastMarkdownPath,
-        lastFolderPath: this.lastFolderPath,
-        sourceFilter: this.sourceFilter,
-        sort: this.taskSort,
-        search: this.taskSearch,
-      },
-    });
+  private dashboardStateDebounceHandle: number | null = null;
+
+  private persistDashboardState(): void {
+    // Debounce: scope/sort/search changes fire on every keystroke and select
+    // change. Each persist writes data.json AND mirrors to the markdown file,
+    // which used to amplify into a write-per-keystroke storm under default
+    // settings.
+    if (this.dashboardStateDebounceHandle !== null) {
+      window.clearTimeout(this.dashboardStateDebounceHandle);
+    }
+    this.dashboardStateDebounceHandle = window.setTimeout(() => {
+      this.dashboardStateDebounceHandle = null;
+      void this.store.updateSettings({
+        taskDashboardState: {
+          scope: this.taskScope,
+          selectedFolderPath: this.selectedFolderPath,
+          lastMarkdownPath: this.lastMarkdownPath,
+          lastFolderPath: this.lastFolderPath,
+          sourceFilter: this.sourceFilter,
+          sort: this.taskSort,
+          search: this.taskSearch,
+        },
+      });
+    }, 300);
   }
 
   private getExistingMainLeaf(): WorkspaceLeaf | null {
@@ -1681,7 +1773,11 @@ function getCurrentFolderScopePath(filePath: string | null, folderPath: string |
   if (!filePath?.includes("/")) {
     return folderPath;
   }
-  return filePath.split("/")[0] ?? folderPath;
+  // Use the file's actual parent folder, not just the top-level segment.
+  // Previously a file at Projects/Alpha/Beta/note.md scoped to "Projects"
+  // and silently broadened the folder view to the whole top-level tree.
+  const parent = filePath.slice(0, filePath.lastIndexOf("/"));
+  return parent || folderPath;
 }
 
 type TaskDisplayNoteGroup = {
@@ -1917,9 +2013,16 @@ function formatExact(ms: number): string {
 }
 
 function formatInputDate(ms: number): string {
+  // Build the datetime-local string from local-time field accessors so it
+  // stays correct across DST boundaries. The old offset-subtraction trick
+  // shifted by an hour for any time on the other side of a DST transition.
   const date = new Date(ms);
-  const offsetMs = date.getTimezoneOffset() * 60_000;
-  return new Date(ms - offsetMs).toISOString().slice(0, 16);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
 function hasFutureDueAt(dueAt: number | null): dueAt is number {

@@ -8,7 +8,16 @@ const FENCE_RE = /^\s*(```|~~~)/;
 const HEADING_RE = /^\s{0,3}#{1,6}\s+(?<heading>.+?)\s*#*\s*$/;
 
 export class TaskScanner {
-  constructor(private app: App) {}
+  constructor(
+    private app: App,
+    /**
+     * Called BEFORE every internal vault.process write so subscribers can
+     * register the path as an expected self-modify. The view uses this to
+     * suppress exactly one modify event per write — replacing the prior
+     * 800ms time-window suppression which could swallow real user edits.
+     */
+    private onWillModifyFile: (path: string) => void = () => {},
+  ) {}
 
   async scan(ignoredPaths: string[] = []): Promise<ScrapedTask[]> {
     const ignored = new Set(ignoredPaths.map((path) => normalizePath(path)));
@@ -70,6 +79,7 @@ export class TaskScanner {
 
     let updatedTask: ScrapedTask | null = null;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -106,12 +116,19 @@ export class TaskScanner {
     return updatedTask;
   }
 
-  async organizeTopLevelTaskSections(filePath: string): Promise<boolean> {
+  async organizeTopLevelTaskSections(
+    filePath: string,
+    allowedHeadings?: readonly string[],
+  ): Promise<boolean> {
     const file = this.app.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile)) return false;
 
+    const allowed = allowedHeadings
+      ? new Set(allowedHeadings.map((h) => h.toLowerCase()))
+      : null;
     let changed = false;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -127,8 +144,18 @@ export class TaskScanner {
         block: string[];
       }> = [];
       let currentSection = "";
+      let inCodeFence = false;
 
       for (let index = tasksHeading + 1; index < endIndex; index += 1) {
+        // Track fence parity so a code-block example like "- [x] do thing"
+        // inside ```...``` is treated as content, not a real task. Without
+        // this, the splice below would pull the example out of the fence
+        // and corrupt the rendered note.
+        if (FENCE_RE.test(lines[index])) {
+          inCodeFence = !inCodeFence;
+          continue;
+        }
+        if (inCodeFence) continue;
         const heading = lines[index].match(HEADING_RE)?.groups?.heading?.trim();
         if (heading) {
           currentSection = heading;
@@ -151,6 +178,10 @@ export class TaskScanner {
         if (!isSectionManagedCheckboxStatus(task.status)) continue;
 
         const section = getTaskSectionHeading(task.status);
+        // Only inject sections the user opted in to via taskSectionHeadings.
+        // Otherwise an auto-organize on modify could silently create a brand
+        // new "Cancelled" heading the user never wanted.
+        if (allowed && !allowed.has(section.toLowerCase())) continue;
         if (section.toLowerCase() === currentSection.toLowerCase()) {
           continue;
         }
@@ -193,6 +224,7 @@ export class TaskScanner {
 
     let task: ScrapedTask | null = null;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -233,6 +265,7 @@ export class TaskScanner {
 
     let changed = false;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -279,6 +312,7 @@ export class TaskScanner {
 
     let changed = false;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -313,6 +347,7 @@ export class TaskScanner {
 
     let changed = false;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -334,6 +369,7 @@ export class TaskScanner {
 
     let changed = false;
 
+    this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
@@ -357,7 +393,12 @@ class MarkdownScanState {
   currentCategory = "Uncategorized";
 
   constructor(lines: string[]) {
-    this.inFrontmatter = lines[0]?.trim() === "---";
+    // Only treat the opening `---` as frontmatter if there is a closing `---`
+    // somewhere in the file. A lone `---` at the top is a horizontal rule
+    // (markdown spec) and treating the whole document as frontmatter hides
+    // every task in the file silently.
+    this.inFrontmatter =
+      lines[0]?.trim() === "---" && hasClosingFrontmatterMarker(lines);
   }
 
   shouldSkip(line: string, index: number): boolean {
@@ -476,6 +517,19 @@ export function buildCheckboxTaskId(filePath: string, text: string): string {
   return `task:${stableHash([filePath, "checkbox", normalizeTaskIdentityText(text)].join("\u001f"))}`;
 }
 
+/**
+ * Extract the post-checkbox task text from a raw markdown line, normalized the
+ * same way the scanner does. Returns null if the line is not a checkbox task.
+ *
+ * Use this when computing `sourceTaskId` for a freshly created task so the id
+ * matches what scanFile() will compute on the next scan.
+ */
+export function extractCheckboxTaskText(line: string): string | null {
+  const match = line.match(CHECKBOX_TASK_RE);
+  if (!match?.groups) return null;
+  return cleanTaskText(match.groups.text);
+}
+
 function buildMarkerTaskId(
   filePath: string,
   markerName: string,
@@ -486,6 +540,25 @@ function buildMarkerTaskId(
 
 function normalizeTaskIdentityText(text: string): string {
   return cleanTaskText(text).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hasClosingFrontmatterMarker(lines: string[]): boolean {
+  // Scan only the first ~50 lines and ignore `---` markers inside a code
+  // fence. Without the fence guard, an unclosed YAML header followed by a
+  // ``` fence containing `---` would wrongly extend "frontmatter" past the
+  // fence, silently dropping every task in between.
+  const limit = Math.min(lines.length, 50);
+  let inFence = false;
+  for (let index = 1; index < limit; index += 1) {
+    const line = lines[index];
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (line.trim() === "---") return true;
+  }
+  return false;
 }
 
 function stableHash(input: string): string {
@@ -517,6 +590,12 @@ function collectTaskContextNotes(
       break;
     }
     if (isScannableTaskLine(line)) {
+      break;
+    }
+    // Don't consume code-fence markers as context. Otherwise the outer
+    // scan loop never sees the fence, MarkdownScanState's parity is wrong,
+    // and tasks below either disappear or fenced code is scraped as tasks.
+    if (FENCE_RE.test(line)) {
       break;
     }
 
@@ -639,6 +718,10 @@ function updateStatusMetadata(
   updated = removeInlineField(updated, "completion");
   updated = removeInlineField(updated, "status");
   updated = removeInlineField(updated, "currentStatus");
+  // Strip [cancelled:: ...] too — getCheckboxStatus inspects this field
+  // FIRST, so leaving it behind silently reverts a Done/To-Do click back
+  // to "cancelled" on the next scan.
+  updated = removeInlineField(updated, "cancelled");
   if (status === "in-progress") {
     return appendInlineField(updated, "status", "In Progress");
   }

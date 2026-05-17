@@ -8,6 +8,8 @@ const testEntries = [
   "tests/parser.test.ts",
   "tests/scheduler.test.ts",
   "tests/store.test.ts",
+  "tests/taskScanner.test.ts",
+  "tests/reminderTransaction.test.ts",
 ];
 
 const outdir = ".tmp-tests";
