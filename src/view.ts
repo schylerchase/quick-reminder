@@ -10,6 +10,7 @@ import {
   TFile,
   WorkspaceLeaf,
   normalizePath,
+  setIcon,
 } from "obsidian";
 import {
   Reminder,
@@ -25,7 +26,15 @@ import { saveScheduledReminder } from "./reminderTransaction";
 import { QuickCaptureModal } from "./modal";
 import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
-import { openMainViewLeaf } from "./workspace";
+import {
+  openMainViewLeaf,
+  findOrReuseMainPaneLeaf,
+  isMainPaneLeaf,
+  isRightSidebarLeaf,
+  isSidebarContainer,
+  expandRightSidebar,
+  collapseRightSidebar,
+} from "./workspace";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
 type ReminderViewState = {
@@ -343,14 +352,14 @@ export class ReminderView extends ItemView {
     ignoredCount: number,
   ): void {
     const stats = parent.createDiv({ cls: "qr-view-stats" });
-    this.renderStat(stats, "Overdue", overdueCount, overdueCount > 0);
-    this.renderStat(stats, "Upcoming", upcomingCount);
-    this.renderStat(stats, "Visible tasks", scrapedCount);
-    this.renderStat(stats, "Ignored", ignoredCount);
+    this.renderStat(stats, "Overdue", overdueCount, "overdue", overdueCount > 0);
+    this.renderStat(stats, "Upcoming", upcomingCount, "upcoming");
+    this.renderStat(stats, "Visible tasks", scrapedCount, "visible");
+    this.renderStat(stats, "Ignored", ignoredCount, "ignored");
   }
 
-  private renderStat(parent: HTMLElement, label: string, count: number, warn = false): void {
-    const stat = parent.createDiv({ cls: `qr-view-stat ${warn ? "is-warning" : ""}` });
+  private renderStat(parent: HTMLElement, label: string, count: number, slug: string, warn = false): void {
+    const stat = parent.createDiv({ cls: `qr-view-stat qr-view-stat-${slug} ${warn ? "is-warning" : ""}` });
     stat.createDiv({ text: String(count), cls: "qr-view-stat-number" });
     stat.createDiv({ text: label, cls: "qr-view-stat-label" });
   }
@@ -632,7 +641,8 @@ export class ReminderView extends ItemView {
     head.setAttr("aria-expanded", String(!collapsed));
 
     const label = head.createSpan({ cls: "qr-view-section-label" });
-    label.createSpan({ text: collapsed ? ">" : "v", cls: "qr-view-section-caret" });
+    const caret = label.createSpan({ cls: "qr-view-section-caret" });
+    setIcon(caret, collapsed ? "chevron-right" : "chevron-down");
     label.createSpan({ text: title, cls: "qr-view-section-title" });
     head.createSpan({ text: count, cls: "qr-view-section-count" });
 
@@ -823,16 +833,45 @@ export class ReminderView extends ItemView {
   }
 
   private openTaskContextNoteEditor(task: ScrapedTask): void {
-    new TaskContextNoteModal(this.app, task, async (rawNoteBlock) => {
-      const saved = await this.taskScanner.replaceTaskContextNoteLines(task, rawNoteBlock);
-      if (!saved) {
-        new Notice("Could not update notes. Open the source note and update it manually.");
-        return;
-      }
-      await this.refreshScrapedTasks();
-      await this.render();
-      new Notice(rawNoteBlock.trim() === "" ? "Task notes cleared" : "Task notes updated");
-    }).open();
+    const tasksApi = this.store.settings.tasksIntegrationEnabled
+      ? getTasksPluginApi(this.app)
+      : null;
+    const escapeHatch = tasksApi
+      ? () => {
+          void this.editWithTasksPlugin(task);
+        }
+      : null;
+    new TaskContextNoteModal(
+      this.app,
+      task,
+      async (rawNoteBlock, statusChange) => {
+        let currentTask = task;
+        if (statusChange) {
+          const updated = await this.taskScanner.setCheckboxStatus(task, statusChange);
+          if (!updated) {
+            new Notice("Could not update task status. Open the note and edit it manually.");
+            return;
+          }
+          await this.store.relinkTask(task.id, updated.id);
+          currentTask = updated;
+        }
+        const saved = await this.taskScanner.replaceTaskContextNoteLines(currentTask, rawNoteBlock);
+        if (!saved) {
+          new Notice("Could not update notes. Open the source note and update it manually.");
+          return;
+        }
+        await this.refreshScrapedTasks();
+        await this.render();
+        if (statusChange && rawNoteBlock.trim() === "") {
+          new Notice("Task updated");
+        } else if (statusChange) {
+          new Notice("Task and notes updated");
+        } else {
+          new Notice(rawNoteBlock.trim() === "" ? "Task notes cleared" : "Task notes updated");
+        }
+      },
+      escapeHatch,
+    ).open();
   }
 
   private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
@@ -936,8 +975,8 @@ export class ReminderView extends ItemView {
       }
       return;
     }
-    new NewTaskModal(this.app, withReminder, async (rawInput) => {
-      await this.createTaskFromInput(filePath, rawInput, withReminder);
+    new NewTaskModal(this.app, withReminder, async (rawInput, status) => {
+      await this.createTaskFromInput(filePath, rawInput, withReminder, status);
     }).open();
   }
 
@@ -952,7 +991,12 @@ export class ReminderView extends ItemView {
     return file instanceof TFile && file.extension === "md" ? file.path : null;
   }
 
-  private async createTaskFromInput(filePath: string, rawInput: string, withReminder: boolean): Promise<void> {
+  private async createTaskFromInput(
+    filePath: string,
+    rawInput: string,
+    withReminder: boolean,
+    status: "todo" | "in-progress" | "completed" = "todo",
+  ): Promise<void> {
     const parsed = parseReminder(rawInput);
     const taskText = withReminder ? parsed.text : rawInput.trim();
     if (!taskText) {
@@ -971,6 +1015,15 @@ export class ReminderView extends ItemView {
       return;
     }
 
+    let finalTask = task;
+    if (status !== "todo") {
+      const updated = await this.taskScanner.setCheckboxStatus(task, status);
+      if (updated) {
+        await this.store.relinkTask(task.id, updated.id);
+        finalTask = updated;
+      }
+    }
+
     if (withReminder && parsed.dueAt) {
       const reminder: Reminder = {
         id: genReminderId(),
@@ -979,7 +1032,7 @@ export class ReminderView extends ItemView {
         dueAt: parsed.dueAt,
         createdAt: Date.now(),
         notified: false,
-        sourceTaskId: task.id,
+        sourceTaskId: finalTask.id,
       };
       await saveScheduledReminder(this.store, this.scheduler, reminder);
     }
@@ -1069,7 +1122,7 @@ export class ReminderView extends ItemView {
   }
 
   private isMainWorkspaceLeaf(leaf: WorkspaceLeaf): boolean {
-    return !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split");
+    return isMainPaneLeaf(leaf);
   }
 
   private async editWithTasksPlugin(task: ScrapedTask): Promise<void> {
@@ -1232,7 +1285,9 @@ export class ReminderView extends ItemView {
   }
 
   private async openVaultDashboard(): Promise<void> {
-    const leaf = this.getExistingMainLeaf() ?? this.app.workspace.getLeaf("split", "vertical");
+    // Reuses the active note's leaf rather than splitting the workspace.
+    // Splitting was producing the side-by-side panes the user pushed back on.
+    const leaf = findOrReuseMainPaneLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
     const state = {
       ...this.getViewState(),
       taskScope: "vault" as TaskDashboardScope,
@@ -1242,7 +1297,7 @@ export class ReminderView extends ItemView {
       await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
-    this.app.workspace.rightSplit.collapse();
+    collapseRightSidebar(this.app.workspace);
     if (leaf.view instanceof ReminderView) {
       leaf.view.applyViewState(state);
       void leaf.view.render(true);
@@ -1274,7 +1329,7 @@ export class ReminderView extends ItemView {
     const state = this.getViewState();
 
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
-      if (leaf.view.containerEl.closest(".mod-right-split")) {
+      if (isRightSidebarLeaf(leaf)) {
         leaf.detach();
       }
     }
@@ -1284,7 +1339,7 @@ export class ReminderView extends ItemView {
       new Notice("Quick Reminder could not open the right sidebar.");
       return;
     }
-    this.app.workspace.rightSplit.expand();
+    expandRightSidebar(this.app.workspace);
     await this.app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof ReminderView) {
       leaf.view.applyViewState(state);
@@ -1364,7 +1419,7 @@ export class ReminderView extends ItemView {
   private getExistingMainLeaf(): WorkspaceLeaf | null {
     return this.app.workspace
       .getLeavesOfType(VIEW_TYPE_REMINDER)
-      .find((leaf) => !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) ?? null;
+      .find(isMainPaneLeaf) ?? null;
   }
 
   private getPreferredMainLeaf(): WorkspaceLeaf | null {
@@ -1381,7 +1436,7 @@ export class ReminderView extends ItemView {
 
   private getMainMarkdownLeaf(leaf: WorkspaceLeaf | null): WorkspaceLeaf | null {
     if (!leaf) return null;
-    if (leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) return null;
+    if (!isMainPaneLeaf(leaf)) return null;
     return leaf.view instanceof MarkdownView ? leaf : null;
   }
 
@@ -1401,7 +1456,7 @@ export class ReminderView extends ItemView {
     let result: WorkspaceLeaf | null = null;
     this.app.workspace.iterateAllLeaves((leaf) => {
       if (result) return;
-      if (!leaf.view.containerEl.closest(".mod-left-split, .mod-right-split")) {
+      if (isMainPaneLeaf(leaf)) {
         result = leaf;
       }
     });
@@ -1411,14 +1466,14 @@ export class ReminderView extends ItemView {
   private getExistingSidebarLeaf(): WorkspaceLeaf | null {
     return this.app.workspace
       .getLeavesOfType(VIEW_TYPE_REMINDER)
-      .find((leaf) => leaf.view.containerEl.closest(".mod-right-split")) ?? null;
+      .find(isRightSidebarLeaf) ?? null;
   }
 
   private closeMainManagerLeaves(keepLeaf: WorkspaceLeaf): void {
     window.setTimeout(() => {
       for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
         if (leaf === keepLeaf) continue;
-        if (leaf.view.containerEl.closest(".mod-right-split")) continue;
+        if (isRightSidebarLeaf(leaf)) continue;
         leaf.detach();
       }
     }, 0);
@@ -1435,7 +1490,7 @@ export class ReminderView extends ItemView {
   }
 
   private async openSidebarLeaf(): Promise<WorkspaceLeaf | null> {
-    this.app.workspace.rightSplit.expand();
+    expandRightSidebar(this.app.workspace);
 
     const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getRightLeaf(true);
     if (!leaf) return null;
@@ -1445,7 +1500,7 @@ export class ReminderView extends ItemView {
   }
 
   private isMainWorkspaceView(): boolean {
-    return !this.containerEl.closest(".mod-left-split, .mod-right-split");
+    return !isSidebarContainer(this.containerEl);
   }
 }
 
@@ -1552,49 +1607,94 @@ class DeleteTaskModal extends Modal {
 
 class TaskContextNoteModal extends Modal {
   private noteEl!: HTMLTextAreaElement;
+  private statusEl!: HTMLDivElement;
+  private status: TaskStatusPick;
+  private readonly initialStatus: TaskStatusPick;
 
   constructor(
     app: App,
     private task: ScrapedTask,
-    private onSubmit: (rawNoteBlock: string) => void | Promise<void>,
+    private onSubmit: (
+      rawNoteBlock: string,
+      statusChange: TaskStatusPick | null,
+    ) => void | Promise<void>,
+    private onOpenTasksEditor: (() => void) | null = null,
   ) {
     super(app);
+    this.initialStatus = mapTaskKindToStatusPick(task);
+    this.status = this.initialStatus;
   }
 
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("qr-modal");
+    contentEl.addClass("qr-task-edit-modal");
 
     const header = contentEl.createDiv({ cls: "qr-modal-header" });
-    header.createEl("h2", { text: "Edit task notes" });
+    header.createEl("h2", { text: "Edit task" });
 
-    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
+    contentEl.createDiv({ text: this.task.text, cls: "qr-task-edit-title" });
+
+    const statusField = contentEl.createDiv({ cls: "qr-field" });
+    statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
+    this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
+    this.renderStatusPill("todo", "circle", "To Do");
+    this.renderStatusPill("in-progress", "loader-circle", "In Progress");
+    this.renderStatusPill("completed", "check-circle-2", "Done");
 
     const field = contentEl.createDiv({ cls: "qr-field" });
     field.createEl("label", {
-      text: "Note",
+      text: "Notes",
       cls: "qr-field-label",
       attr: { for: "qr-task-context-note" },
     });
     this.noteEl = field.createEl("textarea", {
       attr: { id: "qr-task-context-note" },
-      cls: "qr-ignore-note-input qr-task-note-edit-input",
+      cls: "qr-input qr-input-textarea qr-task-note-edit-input",
     });
     this.noteEl.rows = 6;
     this.noteEl.placeholder = "- blocked by firewall change\n- ask vendor for installer flag\nverify on prod hosts";
     this.noteEl.value = getTaskContextNoteEditBlock(this.task);
     this.noteEl.addEventListener("keydown", (event) => handleTextareaIndent(event, this.noteEl));
 
+    if (this.onOpenTasksEditor) {
+      const advanced = contentEl.createDiv({ cls: "qr-modal-advanced" });
+      const link = advanced.createEl("button", {
+        text: "Open in Tasks plugin (due, priority, recurring…)",
+        cls: "qr-link-btn",
+      });
+      link.onclick = () => {
+        this.close();
+        this.onOpenTasksEditor?.();
+      };
+    }
+
     const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
       this.close();
     };
-    actions.createEl("button", { text: "Save notes", cls: "qr-primary-btn" }).onclick = () => {
+    actions.createEl("button", { text: "Save", cls: "qr-primary-btn" }).onclick = () => {
       void this.submit();
     };
 
     window.setTimeout(() => this.noteEl.focus(), 0);
+  }
+
+  private renderStatusPill(value: TaskStatusPick, icon: string, label: string): void {
+    const pill = this.statusEl.createEl("button", { cls: "qr-status-pill" });
+    pill.dataset.value = value;
+    const iconEl = pill.createSpan({ cls: "qr-status-pill-icon" });
+    setIcon(iconEl, icon);
+    pill.createSpan({ text: label });
+    pill.toggleClass("is-active", this.status === value);
+    pill.onclick = () => {
+      this.status = value;
+      for (const child of Array.from(this.statusEl.children)) {
+        child.removeClass("is-active");
+      }
+      pill.addClass("is-active");
+    };
   }
 
   onClose(): void {
@@ -1602,9 +1702,17 @@ class TaskContextNoteModal extends Modal {
   }
 
   private async submit(): Promise<void> {
-    await this.onSubmit(this.noteEl.value);
+    const statusChange = this.status === this.initialStatus ? null : this.status;
+    await this.onSubmit(this.noteEl.value, statusChange);
     this.close();
   }
+}
+
+function mapTaskKindToStatusPick(task: ScrapedTask): TaskStatusPick {
+  if (task.kind !== "checkbox") return "todo";
+  if (task.status === "completed") return "completed";
+  if (task.status === "in-progress") return "in-progress";
+  return "todo";
 }
 
 class NewItemModal extends Modal {
@@ -1619,16 +1727,38 @@ class NewItemModal extends Modal {
   onOpen(): void {
     this.contentEl.empty();
     this.contentEl.addClass("qr-modal");
-    this.contentEl.createEl("h2", { text: "New" });
-    const actions = this.contentEl.createDiv({ cls: "qr-choice-actions" });
-    actions.createEl("button", { text: "Task", cls: "qr-primary-btn" }).onclick = () => {
+    this.contentEl.addClass("qr-new-item-modal");
+    this.contentEl.createEl("h2", { text: "Create new" });
+    this.contentEl.createEl("p", {
+      text: "What do you want to add?",
+      cls: "qr-modal-subtitle",
+    });
+
+    const grid = this.contentEl.createDiv({ cls: "qr-pick-grid" });
+    this.renderPick(grid, "list-checks", "Task", "Add to a markdown checklist", () => {
       this.close();
       this.onTask();
-    };
-    actions.createEl("button", { text: "Reminder", cls: "qr-secondary-btn" }).onclick = () => {
+    });
+    this.renderPick(grid, "alarm-clock", "Reminder", "Notify me at a specific time", () => {
       this.close();
       this.onReminder();
-    };
+    });
+  }
+
+  private renderPick(
+    parent: HTMLElement,
+    icon: string,
+    title: string,
+    subtitle: string,
+    onClick: () => void,
+  ): void {
+    const card = parent.createEl("button", { cls: "qr-pick-card" });
+    const iconWrap = card.createSpan({ cls: "qr-pick-icon" });
+    setIcon(iconWrap, icon);
+    const text = card.createDiv({ cls: "qr-pick-text" });
+    text.createDiv({ text: title, cls: "qr-pick-title" });
+    text.createDiv({ text: subtitle, cls: "qr-pick-subtitle" });
+    card.onclick = onClick;
   }
 
   onClose(): void {
@@ -1636,13 +1766,18 @@ class NewItemModal extends Modal {
   }
 }
 
+type TaskStatusPick = "todo" | "in-progress" | "completed";
+
 class NewTaskModal extends Modal {
   private inputEl!: HTMLTextAreaElement;
+  private previewEl!: HTMLDivElement;
+  private statusEl!: HTMLDivElement;
+  private status: TaskStatusPick = "todo";
 
   constructor(
     app: App,
     private withReminder: boolean,
-    private onSubmit: (rawInput: string) => void | Promise<void>,
+    private onSubmit: (rawInput: string, status: TaskStatusPick) => void | Promise<void>,
   ) {
     super(app);
   }
@@ -1650,7 +1785,19 @@ class NewTaskModal extends Modal {
   onOpen(): void {
     this.contentEl.empty();
     this.contentEl.addClass("qr-modal");
-    this.contentEl.createEl("h2", { text: this.withReminder ? "New reminder task" : "New task" });
+    this.contentEl.addClass("qr-new-task-modal");
+    this.contentEl.createEl("h2", {
+      text: this.withReminder ? "New reminder task" : "New task",
+    });
+
+    if (!this.withReminder) {
+      const statusField = this.contentEl.createDiv({ cls: "qr-field" });
+      statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
+      this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
+      this.renderStatusPill("todo", "circle", "To Do");
+      this.renderStatusPill("in-progress", "loader-circle", "In Progress");
+      this.renderStatusPill("completed", "check-circle-2", "Done");
+    }
 
     const field = this.contentEl.createDiv({ cls: "qr-field" });
     field.createEl("label", {
@@ -1658,16 +1805,22 @@ class NewTaskModal extends Modal {
       cls: "qr-field-label",
     });
     this.inputEl = field.createEl("textarea", {
-      cls: "qr-input",
-      placeholder: this.withReminder ? "e.g. call Alex tomorrow 3pm" : "e.g. follow up with Alex",
+      cls: "qr-input qr-input-textarea",
+      placeholder: this.withReminder
+        ? "e.g. call Alex tomorrow 3pm"
+        : "e.g. follow up with Alex",
     });
-    this.inputEl.rows = 4;
+    this.inputEl.rows = 3;
+    this.inputEl.addEventListener("input", () => this.renderPreview());
     this.inputEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         void this.submit();
       }
     });
+
+    this.previewEl = this.contentEl.createDiv({ cls: "qr-preview" });
+    this.renderPreview();
 
     const actions = this.contentEl.createDiv({ cls: "qr-modal-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => this.close();
@@ -1680,6 +1833,84 @@ class NewTaskModal extends Modal {
     window.setTimeout(() => this.inputEl.focus(), 0);
   }
 
+  private renderStatusPill(value: TaskStatusPick, icon: string, label: string): void {
+    const pill = this.statusEl.createEl("button", { cls: "qr-status-pill" });
+    pill.dataset.value = value;
+    const iconEl = pill.createSpan({ cls: "qr-status-pill-icon" });
+    setIcon(iconEl, icon);
+    pill.createSpan({ text: label });
+    pill.toggleClass("is-active", this.status === value);
+    pill.onclick = () => {
+      this.status = value;
+      for (const child of Array.from(this.statusEl.children)) {
+        child.removeClass("is-active");
+      }
+      pill.addClass("is-active");
+      this.renderPreview();
+    };
+  }
+
+  private renderPreview(): void {
+    this.previewEl.empty();
+    const raw = this.inputEl.value.trim();
+    if (!raw) {
+      this.previewEl.createDiv({
+        text: "Type a task description",
+        cls: "qr-preview-status qr-preview-muted",
+      });
+      return;
+    }
+
+    if (this.withReminder) {
+      const parsed = parseReminder(raw);
+      const ready = !!parsed.dueAt && parsed.dueAt > Date.now();
+      this.previewEl.createDiv({
+        text: ready ? "Ready to create" : "Add a date or time",
+        cls: `qr-preview-status ${ready ? "is-ready" : "needs-time"}`,
+      });
+      this.previewRow("Task", parsed.text || raw);
+      if (parsed.dueAt) {
+        this.previewRow(
+          "Time",
+          new Date(parsed.dueAt).toLocaleString(undefined, {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          }),
+        );
+        if (parsed.matchedText) {
+          this.previewEl.createDiv({
+            text: `Detected "${parsed.matchedText}"`,
+            cls: "qr-preview-meta",
+          });
+        }
+      } else {
+        this.previewRow("Time", "No time detected", "qr-preview-warn");
+      }
+    } else {
+      this.previewEl.createDiv({
+        text: "Ready to create",
+        cls: "qr-preview-status is-ready",
+      });
+      this.previewRow("Task", raw);
+      this.previewRow("Status", this.statusLabel());
+    }
+  }
+
+  private previewRow(label: string, value: string, cls = ""): void {
+    const row = this.previewEl.createDiv({ cls: "qr-preview-row" });
+    row.createSpan({ text: label, cls: "qr-preview-label" });
+    row.createSpan({ text: value, cls });
+  }
+
+  private statusLabel(): string {
+    if (this.status === "todo") return "To Do";
+    if (this.status === "in-progress") return "In Progress";
+    return "Done";
+  }
+
   onClose(): void {
     this.contentEl.empty();
   }
@@ -1690,7 +1921,7 @@ class NewTaskModal extends Modal {
       new Notice("Enter a task.");
       return;
     }
-    await this.onSubmit(value);
+    await this.onSubmit(value, this.status);
     this.close();
   }
 }

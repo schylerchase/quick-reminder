@@ -23,7 +23,13 @@ import {
   extractCheckboxTaskText,
   TaskScanner,
 } from "./taskScanner";
-import { openMainViewLeaf } from "./workspace";
+import {
+  openMainViewLeaf,
+  isMainPaneLeaf,
+  isRightSidebarLeaf as isRightSidebarLeafHelper,
+  collapseRightSidebar,
+  expandRightSidebar,
+} from "./workspace";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
@@ -66,7 +72,7 @@ export default class QuickReminderPlugin extends Plugin {
     this.taskScanner = new TaskScanner(this.app, this.notifySelfModify);
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
-    });
+    }, this);
     this.registerView(
       VIEW_TYPE_REMINDER,
       (leaf) =>
@@ -78,8 +84,16 @@ export default class QuickReminderPlugin extends Plugin {
           (fn) => this.registerSelfModifySubscriber(fn),
         ),
     );
-    this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
-      void this.activateView();
+    // Defer ribbon icon registration to layoutReady. Adding to the ribbon
+    // synchronously during onload triggers a workspace re-layout on iPad
+    // which dismisses any open settings modal (the "instant close menu"
+    // bug). onLayoutReady fires AFTER the user finishes interacting with
+    // the toggle, so the modal stays open.
+    this.app.workspace.onLayoutReady(() => {
+      if (this.isUnloaded) return;
+      this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
+        void this.activateView();
+      });
     });
 
     this.addCommand({
@@ -207,7 +221,10 @@ export default class QuickReminderPlugin extends Plugin {
       await this.scheduler.scanOverdue();
       if (this.isUnloaded) return;
       this.scheduler.scheduleAll();
-      void this.revealActiveFileInExplorer(false);
+      // Intentionally NOT auto-revealing on layoutReady: the user-facing
+      // setting promises reveal "when you switch files", and firing
+      // leftSplit.expand() / the file-explorer command on every plugin
+      // enable dismisses any open settings modal.
     });
 
     this.registerEvent(
@@ -284,7 +301,8 @@ export default class QuickReminderPlugin extends Plugin {
       return;
     }
 
-    window.setTimeout(async () => {
+    const handle = window.setTimeout(async () => {
+      if (this.isUnloaded) return;
       try {
         await this.app.vault.process(file, (content) => {
           if (content.trim().length > 0 || hasTaskSection(content)) {
@@ -296,6 +314,7 @@ export default class QuickReminderPlugin extends Plugin {
         console.error("Quick Reminder task section auto-insert failed", error);
       }
     }, 500);
+    this.registerInterval(handle);
   }
 
   async activateView(
@@ -326,12 +345,12 @@ export default class QuickReminderPlugin extends Plugin {
     }
 
     if (placement === "tab") {
-      workspace.rightSplit.collapse();
+      collapseRightSidebar(workspace);
     }
     if (reveal && leaf) {
       await workspace.revealLeaf(leaf);
       if (placement === "sidebar") {
-        workspace.rightSplit.expand();
+        expandRightSidebar(workspace);
       }
     }
     return leaf?.view instanceof ReminderView ? leaf.view : null;
@@ -735,11 +754,11 @@ export default class QuickReminderPlugin extends Plugin {
 }
 
 function isMainWorkspaceLeaf(leaf: WorkspaceLeaf): boolean {
-  return !leaf.view.containerEl.closest(".mod-left-split, .mod-right-split");
+  return isMainPaneLeaf(leaf);
 }
 
 function isRightSidebarLeaf(leaf: WorkspaceLeaf): boolean {
-  return leaf.view.containerEl.closest(".mod-right-split") !== null;
+  return isRightSidebarLeafHelper(leaf);
 }
 
 function getPreferredMainLeaf(
@@ -792,7 +811,7 @@ async function openReminderSidebarLeaf(
   workspace: App["workspace"],
   reveal: boolean,
 ): Promise<WorkspaceLeaf | null> {
-  workspace.rightSplit.expand();
+  expandRightSidebar(workspace);
 
   const leaf = workspace.getRightLeaf(false) ?? workspace.getRightLeaf(true);
   if (!leaf) return null;

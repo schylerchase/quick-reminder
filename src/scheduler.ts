@@ -1,4 +1,4 @@
-import { Notice, Platform } from "obsidian";
+import { Notice, Platform, Plugin } from "obsidian";
 import { Reminder } from "./types";
 import { ReminderStore } from "./store";
 
@@ -7,11 +7,16 @@ const MAX_TIMEOUT_MS = 2_147_483_000;
 const PERMISSION_REQUEST_TIMEOUT_MS = 5_000;
 
 export class Scheduler {
-  private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private timers: Map<string, number> = new Map();
 
+  // plugin is optional so tests can construct a Scheduler without a Plugin.
+  // In production main.ts passes the Plugin instance so reminder timers are
+  // registered via Plugin.registerInterval and get cleared on plugin unload
+  // even if cancelAll has not yet been called.
   constructor(
     private store: ReminderStore,
     private onFire: FireCallback,
+    private plugin?: Plugin,
   ) {}
 
   scheduleAll(): void {
@@ -29,7 +34,7 @@ export class Scheduler {
     }
     const clamped = Math.min(delay, MAX_TIMEOUT_MS);
     const reminderId = reminder.id;
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       this.timers.delete(reminderId);
       const current = this.findPendingReminder(reminderId);
       if (!current) return;
@@ -40,18 +45,19 @@ export class Scheduler {
       void this.fire(current);
     }, clamped);
     this.timers.set(reminderId, timer);
+    this.plugin?.registerInterval(timer);
   }
 
   cancel(id: string): void {
     const t = this.timers.get(id);
-    if (t) {
-      clearTimeout(t);
+    if (t !== undefined) {
+      window.clearTimeout(t);
       this.timers.delete(id);
     }
   }
 
   cancelAll(): void {
-    for (const t of this.timers.values()) clearTimeout(t);
+    for (const t of this.timers.values()) window.clearTimeout(t);
     this.timers.clear();
   }
 

@@ -1,0 +1,178 @@
+{
+  "lastAuditedAt": "2026-05-17T00:00:00Z",
+  "symbols": [
+    {
+      "name": "App",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/store.ts",
+        "src/taskScanner.ts",
+        "src/workspace.ts",
+        "src/modal.ts",
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "Editor",
+      "kind": "class",
+      "introducedIn": "0.11.11",
+      "sourceFiles": [
+        "src/main.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "EventRef",
+      "kind": "interface",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    },
+    {
+      "name": "ItemView",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "MarkdownView",
+      "kind": "class",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    },
+    {
+      "name": "Menu",
+      "kind": "class",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    },
+    {
+      "name": "Modal",
+      "kind": "class",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/modal.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    },
+    {
+      "name": "Notice",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/store.ts",
+        "src/modal.ts",
+        "src/scheduler.ts",
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "Platform",
+      "kind": "const",
+      "introducedIn": "0.12.2",
+      "sourceFiles": [
+        "src/scheduler.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "Plugin",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/main.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "PluginSettingTab",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/main.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "Setting",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/modal.ts",
+        "src/main.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "TAbstractFile",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "TFile",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/store.ts",
+        "src/taskScanner.ts",
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "TFolder",
+      "kind": "class",
+      "introducedIn": "0.9.7",
+      "sourceFiles": [
+        "src/main.ts"
+      ],
+      "sourceOfTruth": "obsidian.d.ts @since tag"
+    },
+    {
+      "name": "WorkspaceLeaf",
+      "kind": "class",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/workspace.ts",
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    },
+    {
+      "name": "normalizePath",
+      "kind": "function",
+      "introducedIn": "0.10.0",
+      "sourceFiles": [
+        "src/store.ts",
+        "src/taskScanner.ts",
+        "src/main.ts",
+        "src/view.ts"
+      ],
+      "sourceOfTruth": "core API baseline"
+    }
+  ]
+}
