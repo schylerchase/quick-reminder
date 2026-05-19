@@ -63,7 +63,10 @@ export interface Settings {
   taskSectionHeadings: string[];
   autoInsertTaskSections: boolean;
   taskSectionAutoInsertFolders: string[];
+  autoInsertManagedBlock: boolean;
+  managedBlockAutoInsertFolders: string[];
   taskDashboardState: TaskDashboardState;
+  ribbonIconIndex: number | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -77,6 +80,8 @@ export const DEFAULT_SETTINGS: Settings = {
   taskSectionHeadings: ["In Progress", "To Do", "Completed"],
   autoInsertTaskSections: false,
   taskSectionAutoInsertFolders: [],
+  autoInsertManagedBlock: false,
+  managedBlockAutoInsertFolders: [],
   taskDashboardState: {
     scope: "vault",
     selectedFolderPath: null,
@@ -86,4 +91,5 @@ export const DEFAULT_SETTINGS: Settings = {
     sort: "page",
     search: "",
   },
+  ribbonIconIndex: null,
 };

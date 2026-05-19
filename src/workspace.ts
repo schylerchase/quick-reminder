@@ -61,6 +61,40 @@ export async function openMainViewLeaf(
   return leaf;
 }
 
+export async function openSidebarViewLeaf(
+  workspace: App["workspace"],
+  viewType: string,
+  reveal = true,
+): Promise<WorkspaceLeaf | null> {
+  const restored = workspace.getLeavesOfType(viewType).find(isSidebarLeaf);
+  if (restored) {
+    if (isRightSidebarLeaf(restored)) expandRightSidebar(workspace);
+    if (restored.view.getViewType() !== viewType) {
+      await restored.setViewState({ type: viewType, active: reveal });
+    }
+    await restored.loadIfDeferred();
+    return restored;
+  }
+
+  expandRightSidebar(workspace);
+  const leaf = workspace.getRightLeaf(false) ?? workspace.getRightLeaf(true);
+  if (!leaf) return null;
+
+  if (leaf.view.getViewType() !== viewType) {
+    await leaf.setViewState({ type: viewType, active: reveal });
+  }
+  await leaf.loadIfDeferred();
+  return leaf;
+}
+
+export async function openRightSidebarViewLeaf(
+  workspace: App["workspace"],
+  viewType: string,
+  reveal = true,
+): Promise<WorkspaceLeaf | null> {
+  return openSidebarViewLeaf(workspace, viewType, reveal);
+}
+
 /**
  * Get a leaf in the main pane to host the view. Preference:
  * 1. Existing leaf of this view type in the main pane — keep continuity

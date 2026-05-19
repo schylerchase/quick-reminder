@@ -6,6 +6,8 @@ const TODO_MARKER_RE =
   /^\s*(?:[-*+]\s+)?(?<marker>TODO|FIXME|TASK):\s*(?<text>.+)$/;
 const FENCE_RE = /^\s*(```|~~~)/;
 const HEADING_RE = /^\s{0,3}#{1,6}\s+(?<heading>.+?)\s*#*\s*$/;
+const MANAGED_BLOCK_START_RE = /^\s*<!--\s*qr:tasks:start\s*-->\s*$/;
+const MANAGED_BLOCK_END_RE = /^\s*<!--\s*qr:tasks:end\s*-->\s*$/;
 
 export class TaskScanner {
   constructor(
@@ -114,6 +116,39 @@ export class TaskScanner {
     });
 
     return updatedTask;
+  }
+
+  async setCheckboxText(
+    task: ScrapedTask,
+    newText: string,
+  ): Promise<ScrapedTask | null> {
+    if (task.kind !== "checkbox") return null;
+    const cleaned = newText.trim();
+    if (cleaned.length === 0) return null;
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) return null;
+
+    let updated: ScrapedTask | null = null;
+    this.onWillModifyFile(file.path);
+    await this.app.vault.process(file, (content) => {
+      const newline = content.includes("\r\n") ? "\r\n" : "\n";
+      const lines = content.split(/\r?\n/);
+      const index = task.line - 1;
+      const line = lines[index];
+      if (!line) return content;
+      const match = line.match(CHECKBOX_TASK_RE);
+      if (!match?.groups) return content;
+      const prefix = line.slice(0, line.indexOf(`[${match.groups.status}]`));
+      const rewritten = `${prefix}[${match.groups.status}] ${cleaned}`;
+      lines[index] = rewritten;
+      updated = parseCheckboxTask(file, rewritten, task.line, task.category);
+      if (updated) {
+        updated.contextNotes = task.contextNotes;
+        updated.contextNoteLines = task.contextNoteLines;
+      }
+      return lines.join(newline);
+    });
+    return updated;
   }
 
   async organizeTopLevelTaskSections(
@@ -390,6 +425,7 @@ export class TaskScanner {
 class MarkdownScanState {
   private inCodeFence = false;
   private inFrontmatter: boolean;
+  private inManagedBlock = false;
   currentCategory = "Uncategorized";
 
   constructor(lines: string[]) {
@@ -408,11 +444,27 @@ class MarkdownScanState {
     if (this.inFrontmatter) {
       return true;
     }
+
+    // Managed block is a mirror of above-block tasks; counting its lines too
+    // would double the task list. Track via delimiter comments and skip
+    // everything between them (inclusive).
+    if (this.inManagedBlock) {
+      if (MANAGED_BLOCK_END_RE.test(line)) {
+        this.inManagedBlock = false;
+      }
+      return true;
+    }
     if (FENCE_RE.test(line)) {
       this.inCodeFence = !this.inCodeFence;
       return true;
     }
-    return this.inCodeFence;
+    if (this.inCodeFence) return true;
+
+    if (MANAGED_BLOCK_START_RE.test(line)) {
+      this.inManagedBlock = true;
+      return true;
+    }
+    return MANAGED_BLOCK_END_RE.test(line);
   }
 
   private consumeFrontmatterBoundary(line: string, index: number): boolean {

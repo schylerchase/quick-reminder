@@ -1,7 +1,7 @@
 {
   "id": "quick-reminder",
   "name": "Quick Reminder",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.4.0",
   "description": "Natural-language reminders with native OS notifications, plus a lightweight Markdown task dashboard.",
   "author": "Schyler Ryan",

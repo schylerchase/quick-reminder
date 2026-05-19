@@ -26,10 +26,20 @@ import {
 import {
   openMainViewLeaf,
   isMainPaneLeaf,
+  isSidebarLeaf,
   isRightSidebarLeaf as isRightSidebarLeafHelper,
   collapseRightSidebar,
   expandRightSidebar,
 } from "./workspace";
+import { removeManagedBlock } from "./lib/managedTasksBlock";
+import {
+  insertManagedBlockIfNeeded,
+  regenerateManagedBlock,
+} from "./lib/managedTasksOps";
+import {
+  getRibbonIconIndex,
+  restoreRibbonIconIndex,
+} from "./lib/ribbon-order";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
@@ -61,6 +71,27 @@ export default class QuickReminderPlugin extends Plugin {
   };
 
   async onload(): Promise<void> {
+    // Register view FIRST — before any await — so Obsidian's workspace
+    // restore can place leaves at their saved sidebar positions. Registering
+    // after `await store.init()` lets layout restore beat the registration:
+    // Obsidian then renders our leaves as deferred placeholders at the END
+    // of the sidebar (the visible "tabs land at the end" bug). The factory
+    // closure resolves this.store / this.scheduler / this.taskScanner
+    // lazily — view construction happens on tab activation, which is
+    // always AFTER onload completes.
+    this.registerView(
+      VIEW_TYPE_REMINDER,
+      (leaf) =>
+        new ReminderView(
+          leaf,
+          this.store,
+          this.scheduler,
+          this.taskScanner,
+          (fn) => this.registerSelfModifySubscriber(fn),
+          (file, transform) => this.applyManagedBlockTransform(file, transform),
+        ),
+    );
+
     this.store = new ReminderStore(
       this.app,
       async () => (await this.loadData()) as PluginData | null,
@@ -73,17 +104,6 @@ export default class QuickReminderPlugin extends Plugin {
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
     }, this);
-    this.registerView(
-      VIEW_TYPE_REMINDER,
-      (leaf) =>
-        new ReminderView(
-          leaf,
-          this.store,
-          this.scheduler,
-          this.taskScanner,
-          (fn) => this.registerSelfModifySubscriber(fn),
-        ),
-    );
     // Defer ribbon icon registration to layoutReady. Adding to the ribbon
     // synchronously during onload triggers a workspace re-layout on iPad
     // which dismisses any open settings modal (the "instant close menu"
@@ -91,9 +111,11 @@ export default class QuickReminderPlugin extends Plugin {
     // the toggle, so the modal stays open.
     this.app.workspace.onLayoutReady(() => {
       if (this.isUnloaded) return;
-      this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
+      const ribbonIcon = this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
         void this.activateView();
       });
+      this.restoreRibbonPosition(ribbonIcon);
+      this.trackRibbonPosition(ribbonIcon);
     });
 
     this.addCommand({
@@ -156,6 +178,42 @@ export default class QuickReminderPlugin extends Plugin {
         insertTaskSections(editor, this.store.settings.taskSectionHeadings);
       },
     });
+
+    this.addCommand({
+      id: "insert-managed-tasks-block",
+      name: "Insert managed tasks block here",
+      editorCallback: (_editor: Editor, view: MarkdownView) => {
+        const file = view.file;
+        if (!file) return;
+        void this.applyManagedBlockTransform(file, insertManagedBlockIfNeeded);
+      },
+    });
+
+    this.addCommand({
+      id: "remove-managed-tasks-block",
+      name: "Remove managed tasks block",
+      editorCallback: (_editor: Editor, view: MarkdownView) => {
+        const file = view.file;
+        if (!file) return;
+        void this.applyManagedBlockTransform(file, removeManagedBlock);
+      },
+    });
+
+    this.addCommand({
+      id: "regenerate-managed-tasks-block",
+      name: "Regenerate managed tasks block",
+      editorCallback: (_editor: Editor, view: MarkdownView) => {
+        const file = view.file;
+        if (!file) return;
+        void this.applyManagedBlockTransform(file, regenerateManagedBlock);
+      },
+    });
+
+    // NOTE: auto-regenerate on file modify is intentionally disabled.
+    // The managed block is canonical when users edit tasks inside it; an
+    // unconditional regen would clobber those edits with above-block content.
+    // Users invoke `regenerate-managed-tasks-block` explicitly when they want
+    // scattered tasks pulled into the block.
 
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
@@ -271,6 +329,14 @@ export default class QuickReminderPlugin extends Plugin {
       }),
     );
 
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => {
+        if (file instanceof TFile) {
+          void this.maybeAutoInsertManagedBlock(file);
+        }
+      }),
+    );
+
     this.app.workspace.onLayoutReady(() => {
       try {
         this.registerDomEvent(
@@ -290,6 +356,78 @@ export default class QuickReminderPlugin extends Plugin {
   onunload(): void {
     this.isUnloaded = true;
     this.scheduler?.cancelAll();
+  }
+
+  private restoreRibbonPosition(ribbonIcon: HTMLElement): void {
+    const restore = () =>
+      restoreRibbonIconIndex(ribbonIcon, this.store.settings.ribbonIconIndex);
+    restore();
+    window.setTimeout(restore, 250);
+    window.setTimeout(restore, 1000);
+    window.setTimeout(restore, 2000);
+  }
+
+  private trackRibbonPosition(ribbonIcon: HTMLElement): void {
+    let canSave = false;
+    let lastSaved = this.store.settings.ribbonIconIndex;
+    const scheduleSave = () => {
+      if (!canSave) return;
+      window.setTimeout(() => {
+        const index = getRibbonIconIndex(ribbonIcon);
+        if (index === null || index === lastSaved) return;
+        lastSaved = index;
+        this.store
+          .updateSettings({ ribbonIconIndex: index })
+          .catch((error) => console.error("Quick Reminder: failed to save ribbon order", error));
+      }, 150);
+    };
+
+    window.setTimeout(() => {
+      canSave = true;
+    }, 2500);
+
+    this.registerDomEvent(ribbonIcon, "mouseup", scheduleSave);
+    this.registerDomEvent(ribbonIcon, "touchend", scheduleSave);
+    this.registerDomEvent(ribbonIcon, "dragend", scheduleSave);
+    this.registerDomEvent(ribbonIcon, "keyup", scheduleSave);
+    const parent = ribbonIcon.parentElement;
+    if (parent) {
+      const observer = new MutationObserver(scheduleSave);
+      observer.observe(parent, { childList: true });
+      this.register(() => observer.disconnect());
+    }
+  }
+
+  async applyManagedBlockTransform(
+    file: TFile,
+    transform: (content: string) => string,
+  ): Promise<void> {
+    try {
+      await this.app.vault.process(file, (content) => {
+        const next = transform(content);
+        if (next === content) return content;
+        this.notifySelfModify(file.path);
+        return next;
+      });
+    } catch (error) {
+      console.error("Quick Reminder managed block transform failed", error);
+      new Notice("Quick Reminder: failed to update managed tasks block");
+    }
+  }
+
+  private async maybeAutoInsertManagedBlock(file: TFile): Promise<void> {
+    const settings = this.store.settings;
+    if (!settings.autoInsertManagedBlock || file.extension !== "md") return;
+    if (!isPathInFolders(file.path, settings.managedBlockAutoInsertFolders)) return;
+    if (this.isUnloaded) return;
+    try {
+      await this.applyManagedBlockTransform(
+        file,
+        insertManagedBlockIfNeeded,
+      );
+    } catch (error) {
+      console.error("Quick Reminder managed block auto-insert failed", error);
+    }
   }
 
   private maybeAutoInsertTaskSections(file: TFile): void {
@@ -326,7 +464,7 @@ export default class QuickReminderPlugin extends Plugin {
       placement === "sidebar"
         ? workspace
             .getLeavesOfType(VIEW_TYPE_REMINDER)
-            .filter((leaf) => isRightSidebarLeaf(leaf))
+            .filter((leaf) => isSidebarLeaf(leaf))
         : workspace
             .getLeavesOfType(VIEW_TYPE_REMINDER)
             .filter((leaf) => isMainWorkspaceLeaf(leaf));
@@ -338,10 +476,20 @@ export default class QuickReminderPlugin extends Plugin {
         await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: reveal });
       }
     } else {
-      for (const existingLeaf of existing) {
-        existingLeaf.detach();
+      // Reuse the restored leaf in its restored position.
+      // Detaching + recreating would push the tab to the end of the sidebar
+      // on every reactivation, destroying the user's tab order across reloads.
+      if (existing.length > 0) {
+        leaf = existing[0];
+        if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
+          await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: reveal });
+        }
+        await leaf.loadIfDeferred();
+        // Detach any stale duplicates from prior buggy reactivations.
+        for (let i = 1; i < existing.length; i += 1) existing[i].detach();
+      } else {
+        leaf = await openReminderSidebarLeaf(workspace, reveal);
       }
-      leaf = await openReminderSidebarLeaf(workspace, reveal);
     }
 
     if (placement === "tab") {
@@ -349,7 +497,7 @@ export default class QuickReminderPlugin extends Plugin {
     }
     if (reveal && leaf) {
       await workspace.revealLeaf(leaf);
-      if (placement === "sidebar") {
+      if (placement === "sidebar" && isRightSidebarLeaf(leaf)) {
         expandRightSidebar(workspace);
       }
     }
@@ -379,6 +527,8 @@ export default class QuickReminderPlugin extends Plugin {
 
   private getCurrentManagerPlacement(): "sidebar" | "tab" {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER);
+    // Need the leaf identity to compare against the reminder leaf list,
+    // not a view. getActiveViewOfType does not give us the leaf.
     const activeLeaf = this.app.workspace.activeLeaf;
     if (activeLeaf && leaves.includes(activeLeaf)) {
       return isMainWorkspaceLeaf(activeLeaf) ? "tab" : "sidebar";
@@ -395,6 +545,8 @@ export default class QuickReminderPlugin extends Plugin {
       .find((leaf) => isMainWorkspaceLeaf(leaf));
     if (!mainManagerLeaf) return;
 
+    // Need the leaf to pass to setActiveLeaf and to compare identity
+    // against mainManagerLeaf.
     const activeLeaf = this.app.workspace.activeLeaf;
     if (
       activeLeaf &&
@@ -445,12 +597,8 @@ export default class QuickReminderPlugin extends Plugin {
   }
 
   private async openTaskDashboard(): Promise<void> {
-    const activeLeaf = this.app.workspace.activeLeaf;
-    const activeView = activeLeaf?.view;
-    const file =
-      activeView instanceof MarkdownView
-        ? activeView.file
-        : this.app.workspace.getActiveFile();
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const file = activeView?.file ?? this.app.workspace.getActiveFile();
     if (!(file instanceof TFile) || file.extension !== "md") {
       const view = await this.activateView(true, "tab");
       view?.setScope("vault");
@@ -764,6 +912,7 @@ function isRightSidebarLeaf(leaf: WorkspaceLeaf): boolean {
 function getPreferredMainLeaf(
   workspace: App["workspace"],
 ): WorkspaceLeaf | null {
+  // Workspace placement helper, needs the leaf, not a view.
   const activeLeaf = getMainWorkspaceLeaf(workspace.activeLeaf);
   if (activeLeaf) return activeLeaf;
 
@@ -1173,6 +1322,42 @@ class QuickReminderSettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             await this.plugin.store.updateSettings({
               taskSectionAutoInsertFolders: v
+                .split(/\r?\n/)
+                .map((folder) => normalizePath(folder.trim()))
+                .filter(Boolean),
+            });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-insert managed tasks block on file open")
+      .setDesc(
+        "TOC-style. When a note in the folders below has tasks but no managed block, automatically insert one and keep it regenerated on each open.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.store.settings.autoInsertManagedBlock)
+          .onChange(async (v) => {
+            await this.plugin.store.updateSettings({
+              autoInsertManagedBlock: v,
+            });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Managed block folders")
+      .setDesc(
+        "One vault-relative folder per line. Notes inside these folders get auto-managed.",
+      )
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("Projects\nWork")
+          .setValue(
+            this.plugin.store.settings.managedBlockAutoInsertFolders.join("\n"),
+          )
+          .onChange(async (v) => {
+            await this.plugin.store.updateSettings({
+              managedBlockAutoInsertFolders: v
                 .split(/\r?\n/)
                 .map((folder) => normalizePath(folder.trim()))
                 .filter(Boolean),

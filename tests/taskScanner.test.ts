@@ -3,7 +3,20 @@ import assert from "node:assert/strict";
 import {
   buildCheckboxTaskId,
   extractCheckboxTaskText,
+  TaskScanner,
 } from "../src/taskScanner";
+import { TFile } from "obsidian";
+
+class FakeFile extends TFile {
+  path: string;
+  basename: string;
+
+  constructor(path: string) {
+    super();
+    this.path = path;
+    this.basename = path.split("/").pop()?.replace(/\.md$/, "") ?? path;
+  }
+}
 
 test("extractCheckboxTaskText strips the checkbox prefix and inline status fields", () => {
   const line = "- [ ] write spec [status:: To Do]";
@@ -27,4 +40,32 @@ test("extractCheckboxTaskText keeps inline [due:: ...] so id matches scanner out
 test("extractCheckboxTaskText returns null for non-checkbox lines", () => {
   assert.equal(extractCheckboxTaskText("just a paragraph"), null);
   assert.equal(extractCheckboxTaskText("- bullet without checkbox"), null);
+});
+
+test("scan ignores checkbox tasks inside a managed tasks block", async () => {
+  const file = new FakeFile("Projects/Roadmap.md");
+  const content = [
+    "# Roadmap",
+    "",
+    "## Phase A",
+    "- [ ] source task",
+    "",
+    "<!-- qr:tasks:start -->",
+    "## Phase A",
+    "- [ ] source task",
+    "<!-- qr:tasks:end -->",
+  ].join("\n");
+  const app = {
+    vault: {
+      getMarkdownFiles: () => [file],
+      cachedRead: async () => content,
+    },
+  };
+  const scanner = new TaskScanner(app as never);
+
+  const tasks = await scanner.scan();
+
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].text, "source task");
+  assert.equal(tasks[0].line, 4);
 });

@@ -27,9 +27,18 @@ import { QuickCaptureModal } from "./modal";
 import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
 import {
+  addTaskUnderHeading,
+  appendHeading,
+  renameHeadingInContent,
+} from "./lib/managedTasksOps";
+import { getPhaseEditAction } from "./lib/phase-actions";
+import { filterTasksByQuery, getTaskSearchText } from "./lib/task-search";
+import {
   openMainViewLeaf,
+  openSidebarViewLeaf,
   findOrReuseMainPaneLeaf,
   isMainPaneLeaf,
+  isSidebarLeaf,
   isRightSidebarLeaf,
   isSidebarContainer,
   expandRightSidebar,
@@ -52,6 +61,10 @@ export class ReminderView extends ItemView {
     void this.render();
   };
   private collapsedSections = new Set<string>(["Completed vault tasks", "Ignored", "History"]);
+  private collapsedPhases = new Set<string>();
+  private phasePageLimits = new Map<string, number>();
+  private phaseSearchQueries = new Map<string, string>();
+  private activePhaseSearchKey: string | null = null;
   private editingId: string | null = null;
   private scrapedTasks: ScrapedTask[] = [];
   private hasScannedTasks = false;
@@ -91,6 +104,15 @@ export class ReminderView extends ItemView {
     private subscribeToSelfModifies: (
       fn: (path: string) => void,
     ) => () => void = () => () => {},
+    /**
+     * Apply a pure transform to a file's content via vault.process while
+     * suppressing the self-modify event. Plugin supplies this; view uses it
+     * for managed-block source rewrites.
+     */
+    private applyManagedBlockTransform: (
+      file: TFile,
+      transform: (content: string) => string,
+    ) => Promise<void> = async () => {},
   ) {
     super(leaf);
   }
@@ -608,20 +630,12 @@ export class ReminderView extends ItemView {
         this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", true);
       }
     } else {
-      for (const note of groupTasksForDisplay(visibleTasks)) {
+      for (const note of groupTasksByPhase(visibleTasks)) {
         section.createDiv({ text: note.filePath, cls: "qr-task-note-title" });
-
-        for (const status of note.statuses) {
-          section.createDiv({ text: status.title, cls: "qr-task-group-title" });
-          for (const category of status.categories) {
-            if (category.title) {
-              section.createDiv({ text: category.title, cls: "qr-task-category-title" });
-            }
-            for (const task of category.tasks) {
-              this.renderScrapedRow(section, task, isIgnored, ignoredTaskNotes[task.id] ?? "", false);
-            }
-          }
+        for (const phase of note.phases) {
+          this.renderPhaseCard(section, note.filePath, phase, isIgnored, ignoredTaskNotes);
         }
+        this.renderAddCategoryRow(section, note.filePath);
       }
     }
 
@@ -666,6 +680,412 @@ export class ReminderView extends ItemView {
     return this.collapsedSections.has(title);
   }
 
+  private phaseKey(filePath: string, phaseName: string): string {
+    return `${filePath}::${phaseName}`;
+  }
+
+  private renderPhaseCard(
+    parent: HTMLElement,
+    filePath: string,
+    phase: TaskPhaseGroup,
+    isIgnored: boolean,
+    ignoredTaskNotes: Readonly<Record<string, string>>,
+  ): void {
+    const key = this.phaseKey(filePath, phase.name);
+    const collapsed = this.collapsedPhases.has(key);
+    const accent = phase.isInbox ? null : getPhaseAccentHue(phase.name);
+    const card = parent.createDiv({ cls: "qr-phase-card" });
+    card.toggleClass("qr-phase-card-inbox", phase.isInbox);
+    card.toggleClass("is-collapsed", collapsed);
+    if (accent !== null) {
+      card.style.setProperty("--phase-accent", `hsl(${accent}, 70%, 55%)`);
+      card.style.setProperty(
+        "--phase-accent-soft",
+        `hsl(${accent}, 70%, 55% / 0.18)`,
+      );
+    }
+
+    const total = phase.tasks.length;
+    const done = phase.tasks.filter((t) => t.completed).length;
+    const inProg = phase.tasks.filter((t) => t.status === "in-progress").length;
+    const progressPct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    const head = card.createDiv({ cls: "qr-phase-head" });
+    head.setAttr("role", "button");
+    head.setAttr("tabindex", "0");
+    head.setAttr("aria-expanded", String(!collapsed));
+
+    const caret = head.createSpan({ cls: "qr-phase-caret" });
+    setIcon(caret, collapsed ? "chevron-right" : "chevron-down");
+
+    const title = head.createSpan({ text: phase.name, cls: "qr-phase-title" });
+    title.toggleClass("qr-phase-title-inbox", phase.isInbox);
+    if (!phase.isInbox) {
+      title.setAttr("title", "Double-click to rename");
+      title.ondblclick = (event) => {
+        event.stopPropagation();
+        this.startInlineRename(title, filePath, phase.name);
+      };
+    }
+
+    const editAction = getPhaseEditAction(phase);
+    if (editAction) {
+      const edit = head.createEl("button", {
+        cls: "qr-phase-action qr-phase-edit",
+        attr: {
+          type: "button",
+          "aria-label": editAction.ariaLabel,
+          title: editAction.title,
+        },
+      });
+      const editIcon = edit.createSpan({ cls: "qr-phase-action-icon" });
+      setIcon(editIcon, "pencil");
+      edit.createSpan({ text: editAction.label, cls: "qr-phase-action-label" });
+      edit.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.startInlineRename(title, filePath, phase.name);
+      };
+      edit.onkeydown = (event) => {
+        event.stopPropagation();
+      };
+    }
+
+    const pillText =
+      total === 0
+        ? "Empty"
+        : done === total
+          ? "Done"
+          : inProg > 0
+            ? "In progress"
+            : "Open";
+    const pill = head.createSpan({
+      text: pillText,
+      cls: `qr-phase-pill qr-phase-pill-${pillText.toLowerCase().replace(/\s+/g, "-")}`,
+    });
+    void pill;
+
+    const progressWrap = head.createSpan({ cls: "qr-phase-progress" });
+    const progressBar = progressWrap.createSpan({ cls: "qr-phase-bar" });
+    progressBar.addClass("qr-progress-bar");
+    progressBar.style.setProperty("--qr-progress", `${progressPct}%`);
+
+    head.createSpan({
+      text: `${done}/${total}`,
+      cls: "qr-phase-count",
+    });
+
+    const toggle = () => {
+      // Toggle visually via classList (no re-render). Re-rendering on every
+      // click destroyed the title element between the two clicks of a
+      // dblclick, so the browser never fired dblclick → rename never worked.
+      const isNowCollapsed = !card.hasClass("is-collapsed");
+      card.toggleClass("is-collapsed", isNowCollapsed);
+      setIcon(caret, isNowCollapsed ? "chevron-right" : "chevron-down");
+      head.setAttr("aria-expanded", String(!isNowCollapsed));
+      if (isNowCollapsed) {
+        this.collapsedPhases.add(key);
+      } else {
+        this.collapsedPhases.delete(key);
+      }
+    };
+    head.onclick = (event) => {
+      const target = event.target as HTMLElement;
+      // Title handles its own dblclick → don't toggle when clicking on it.
+      if (target.closest(".qr-phase-title")) return;
+      if (target.closest(".qr-phase-action")) return;
+      if (target.closest(".qr-phase-search")) return;
+      toggle();
+    };
+    head.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle();
+    };
+
+    if (collapsed) return;
+
+    const phaseQuery = this.phaseSearchQueries.get(key) ?? "";
+    const searchWrap = card.createDiv({ cls: "qr-phase-filter" });
+    const search = searchWrap.createEl("input", {
+      type: "search",
+      cls: "qr-phase-search",
+      placeholder: `Search ${phase.name}`,
+    });
+    search.value = phaseQuery;
+    search.oninput = () => {
+      const next = search.value;
+      if (next.trim()) {
+        this.phaseSearchQueries.set(key, next);
+      } else {
+        this.phaseSearchQueries.delete(key);
+      }
+      this.phasePageLimits.delete(key);
+      this.activePhaseSearchKey = key;
+      void this.render();
+    };
+    if (this.activePhaseSearchKey === key) {
+      window.setTimeout(() => {
+        search.focus();
+        search.setSelectionRange(search.value.length, search.value.length);
+      }, 0);
+    }
+
+    const body = card.createDiv({ cls: "qr-phase-body" });
+    if (total === 0) {
+      body.createDiv({
+        text: "No tasks in this phase yet.",
+        cls: "qr-phase-empty",
+      });
+      return;
+    }
+    const filteredTasks = filterTasksByQuery(phase.tasks, phaseQuery);
+    if (phaseQuery.trim()) {
+      searchWrap.createSpan({
+        text: `${filteredTasks.length}/${total}`,
+        cls: "qr-phase-search-count",
+      });
+    }
+    if (filteredTasks.length === 0) {
+      body.createDiv({
+        text: "No tasks match this category search.",
+        cls: "qr-phase-empty",
+      });
+      this.renderAddTaskRow(body, filePath, phase);
+      return;
+    }
+    const pageLimit = this.phasePageLimits.get(key) ?? PHASE_PAGE_SIZE;
+    const visible = phaseQuery.trim()
+      ? filteredTasks
+      : filteredTasks.slice(0, pageLimit);
+    for (const task of visible) {
+      this.renderScrapedRow(
+        body,
+        task,
+        isIgnored,
+        ignoredTaskNotes[task.id] ?? "",
+        false,
+      );
+    }
+    if (!phaseQuery.trim() && total > pageLimit) {
+      const more = body.createEl("button", {
+        text: `Show ${Math.min(PHASE_PAGE_SIZE, total - pageLimit)} more`,
+        cls: "qr-phase-show-more",
+      });
+      more.onclick = () => {
+        this.phasePageLimits.set(key, pageLimit + PHASE_PAGE_SIZE);
+        void this.render();
+      };
+    } else if (!phaseQuery.trim() && total > PHASE_PAGE_SIZE) {
+      const less = body.createEl("button", {
+        text: "Collapse to 25",
+        cls: "qr-phase-show-more",
+      });
+      less.onclick = () => {
+        this.phasePageLimits.delete(key);
+        void this.render();
+      };
+    }
+
+    this.renderAddTaskRow(body, filePath, phase);
+  }
+
+  private startInlineRename(
+    titleEl: HTMLElement,
+    filePath: string,
+    oldName: string,
+  ): void {
+    const original = titleEl.getText();
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = oldName;
+    input.className = "qr-phase-rename-input";
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const restore = (text: string) => {
+      const span = document.createElement("span");
+      span.className = titleEl.className;
+      span.setText(text);
+      span.setAttr("title", "Double-click to rename");
+      span.ondblclick = (event) => {
+        event.stopPropagation();
+        this.startInlineRename(span, filePath, text);
+      };
+      input.replaceWith(span);
+    };
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const next = input.value.trim();
+      if (next.length === 0 || next === oldName) {
+        restore(original);
+        return;
+      }
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) {
+        new Notice(`Quick Reminder: cannot find ${filePath}`);
+        restore(original);
+        return;
+      }
+      await this.applyManagedBlockTransform(file, (content) =>
+        renameHeadingInContent(content, oldName, next),
+      );
+      void this.render();
+    };
+
+    input.onblur = () => void commit();
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void commit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        committed = true;
+        restore(original);
+      }
+    };
+  }
+
+  private startInlineTaskEdit(row: HTMLElement, task: ScrapedTask): void {
+    const textEl = row.querySelector<HTMLElement>(".qr-task-main-text");
+    if (!textEl) return;
+    const original = textEl.getText();
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = task.text;
+    input.className = "qr-task-edit-input";
+    textEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const restore = (text: string) => {
+      const div = document.createElement("div");
+      div.className = "qr-view-row-text qr-task-main-text";
+      div.setText(text);
+      input.replaceWith(div);
+    };
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const next = input.value.trim();
+      if (next.length === 0 || next === task.text) {
+        restore(original);
+        return;
+      }
+      const updated = await this.taskScanner.setCheckboxText(task, next);
+      if (!updated) {
+        new Notice("Quick Reminder: could not update task text");
+        restore(original);
+        return;
+      }
+      void this.render();
+    };
+
+    input.onblur = () => void commit();
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void commit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        committed = true;
+        restore(original);
+      }
+    };
+  }
+
+  private renderAddTaskRow(
+    parent: HTMLElement,
+    filePath: string,
+    phase: TaskPhaseGroup,
+  ): void {
+    const row = parent.createDiv({ cls: "qr-phase-add" });
+    const button = row.createEl("button", {
+      text: `+ Add task to ${phase.isInbox ? "Inbox" : phase.name}`,
+      cls: "qr-phase-add-button",
+    });
+    button.onclick = () => {
+      this.swapForInput(row, button, "Task text…", async (value) => {
+        const text = value.trim();
+        if (text.length === 0) return;
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile)) {
+          new Notice(`Quick Reminder: cannot find ${filePath}`);
+          return;
+        }
+        await this.applyManagedBlockTransform(file, (content) =>
+          addTaskUnderHeading(content, phase.isInbox ? "Inbox" : phase.name, text),
+        );
+      });
+    };
+  }
+
+  private renderAddCategoryRow(parent: HTMLElement, filePath: string): void {
+    const row = parent.createDiv({ cls: "qr-phase-add-category" });
+    const button = row.createEl("button", {
+      text: "+ Add category",
+      cls: "qr-phase-add-category-button",
+    });
+    button.onclick = () => {
+      this.swapForInput(
+        row,
+        button,
+        "Category name (creates ## heading in source)",
+        async (value) => {
+          const name = value.trim();
+          if (name.length === 0) return;
+          const file = this.app.vault.getAbstractFileByPath(filePath);
+          if (!(file instanceof TFile)) {
+            new Notice(`Quick Reminder: cannot find ${filePath}`);
+            return;
+          }
+          await this.applyManagedBlockTransform(file, (content) =>
+            appendHeading(content, name),
+          );
+        },
+      );
+    };
+  }
+
+  private swapForInput(
+    row: HTMLElement,
+    button: HTMLElement,
+    placeholder: string,
+    onSubmit: (value: string) => Promise<void>,
+  ): void {
+    button.addClass("qr-hidden");
+    const input = row.createEl("input", {
+      type: "text",
+      cls: "qr-phase-add-input",
+    });
+    input.placeholder = placeholder;
+    input.focus();
+    const restore = () => {
+      input.remove();
+      button.removeClass("qr-hidden");
+    };
+    input.onblur = () => {
+      if (input.value.trim().length === 0) restore();
+    };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const value = input.value;
+        restore();
+        void onSubmit(value).then(() => this.render());
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        restore();
+      }
+    };
+  }
+
   private renderScrapedRow(
     parent: HTMLElement,
     task: ScrapedTask,
@@ -674,9 +1094,7 @@ export class ReminderView extends ItemView {
     showFilePath = true,
   ): void {
     const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
-    row.dataset.qrTaskSearch = [task.text, ...task.contextNotes, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
-      .join(" ")
-      .toLowerCase();
+    row.dataset.qrTaskSearch = getTaskSearchText(task);
     row.addClass(`qr-task-status-${getTaskStatusClassName(task.status)}`);
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
@@ -752,17 +1170,23 @@ export class ReminderView extends ItemView {
         await this.updateTaskStatus(task, task.completed ? "todo" : "completed", task.completed ? "Task marked to do" : "Task marked done");
       };
 
-      // Only render Edit when Tasks integration is enabled AND available —
-      // otherwise the button would either pop the Tasks modal the user
-      // opted out of, or show a "not available" error on every click.
-      if (
-        this.store.settings.tasksIntegrationEnabled &&
-        getTasksPluginApi(this.app) !== null
-      ) {
-        actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = async () => {
+      // Inline edit — always available. Falls back to Tasks plugin modal
+      // when that integration is wired, otherwise swaps the row text to an
+      // input and rewrites the source line on Enter.
+      const editBtn = actions.createEl("button", {
+        text: "Edit",
+        cls: "qr-row-btn",
+      });
+      editBtn.onclick = async () => {
+        if (
+          this.store.settings.tasksIntegrationEnabled &&
+          getTasksPluginApi(this.app) !== null
+        ) {
           await this.editWithTasksPlugin(task);
-        };
-      }
+        } else {
+          this.startInlineTaskEdit(row, task);
+        }
+      };
     }
 
     this.addScrapedRowContextMenu(row, task, isIgnored);
@@ -1177,22 +1601,16 @@ export class ReminderView extends ItemView {
   }
 
   private getFilteredScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
-    const query = this.taskSearch.trim().toLowerCase();
-    return tasks.filter((task) => {
+    const sourceMatched = tasks.filter((task) => {
       // Previously cancelled tasks were dropped entirely — the user had no
       // way to find or un-cancel them from the dashboard. Show them with
       // their cancelled badge instead; users can toggle status from the row.
       if (this.sourceFilter !== "all" && task.kind !== this.sourceFilter) {
         return false;
       }
-      if (!query) {
-        return true;
-      }
-      return [task.text, ...task.contextNotes, task.filePath, task.category, task.project, task.status, task.marker ?? ""]
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
+      return true;
     });
+    return filterTasksByQuery(sourceMatched, this.taskSearch);
   }
 
   private sortScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
@@ -1306,6 +1724,8 @@ export class ReminderView extends ItemView {
   }
 
   private getDashboardSourceFile(): TFile | null {
+    // Need the leaf to gate on getMainMarkdownLeaf before reading the view,
+    // since we only accept files from leaves in the main split.
     const activeLeaf = this.app.workspace.activeLeaf;
     if (activeLeaf && this.getMainMarkdownLeaf(activeLeaf)) {
       const file = activeLeaf.view instanceof MarkdownView ? activeLeaf.view.file : null;
@@ -1328,18 +1748,12 @@ export class ReminderView extends ItemView {
   private async openAsSidebar(): Promise<void> {
     const state = this.getViewState();
 
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
-      if (isRightSidebarLeaf(leaf)) {
-        leaf.detach();
-      }
-    }
-
     const leaf = await this.openSidebarLeaf();
     if (!leaf) {
-      new Notice("Quick Reminder could not open the right sidebar.");
+      new Notice("Quick Reminder could not open the sidebar.");
       return;
     }
-    expandRightSidebar(this.app.workspace);
+    if (isRightSidebarLeaf(leaf)) expandRightSidebar(this.app.workspace);
     await this.app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof ReminderView) {
       leaf.view.applyViewState(state);
@@ -1423,6 +1837,7 @@ export class ReminderView extends ItemView {
   }
 
   private getPreferredMainLeaf(): WorkspaceLeaf | null {
+    // Workspace placement helper, needs the leaf, not a view.
     const activeLeaf = this.getMainMarkdownLeaf(this.app.workspace.activeLeaf);
     if (activeLeaf) {
       return activeLeaf;
@@ -1466,14 +1881,14 @@ export class ReminderView extends ItemView {
   private getExistingSidebarLeaf(): WorkspaceLeaf | null {
     return this.app.workspace
       .getLeavesOfType(VIEW_TYPE_REMINDER)
-      .find(isRightSidebarLeaf) ?? null;
+      .find(isSidebarLeaf) ?? null;
   }
 
   private closeMainManagerLeaves(keepLeaf: WorkspaceLeaf): void {
     window.setTimeout(() => {
       for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REMINDER)) {
         if (leaf === keepLeaf) continue;
-        if (isRightSidebarLeaf(leaf)) continue;
+        if (isSidebarLeaf(leaf)) continue;
         leaf.detach();
       }
     }, 0);
@@ -1490,13 +1905,7 @@ export class ReminderView extends ItemView {
   }
 
   private async openSidebarLeaf(): Promise<WorkspaceLeaf | null> {
-    expandRightSidebar(this.app.workspace);
-
-    const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getRightLeaf(true);
-    if (!leaf) return null;
-    await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
-    await leaf.loadIfDeferred();
-    return leaf;
+    return openSidebarViewLeaf(this.app.workspace, VIEW_TYPE_REMINDER, true);
   }
 
   private isMainWorkspaceView(): boolean {
@@ -2010,6 +2419,58 @@ type TaskDisplayNoteGroup = {
     }>;
   }>;
 };
+
+const PHASE_PAGE_SIZE = 25;
+
+type TaskPhaseGroup = {
+  name: string;
+  isInbox: boolean;
+  tasks: ScrapedTask[];
+};
+
+type TaskPhaseNoteGroup = {
+  filePath: string;
+  phases: TaskPhaseGroup[];
+};
+
+function groupTasksByPhase(tasks: ScrapedTask[]): TaskPhaseNoteGroup[] {
+  const notes: TaskPhaseNoteGroup[] = [];
+  for (const task of tasks) {
+    let note = notes.find((n) => n.filePath === task.filePath);
+    if (!note) {
+      note = { filePath: task.filePath, phases: [] };
+      notes.push(note);
+    }
+    const raw = (task.category || "").trim();
+    const isInbox = raw === "" || raw.toLowerCase() === "uncategorized";
+    const name = isInbox ? "Inbox" : raw;
+    let phase = note.phases.find(
+      (p) => p.name === name && p.isInbox === isInbox,
+    );
+    if (!phase) {
+      phase = { name, isInbox, tasks: [] };
+      note.phases.push(phase);
+    }
+    phase.tasks.push(task);
+  }
+  for (const note of notes) {
+    // Inbox first, then alphabetical phases by first appearance order (already preserved)
+    note.phases.sort((a, b) =>
+      a.isInbox === b.isInbox ? 0 : a.isInbox ? -1 : 1,
+    );
+  }
+  return notes;
+}
+
+function getPhaseAccentHue(name: string): number {
+  // Deterministic hue 0-359 from name; FNV-1a 32-bit hash mod 360.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i += 1) {
+    h ^= name.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h % 360;
+}
 
 function groupTasksForDisplay(tasks: ScrapedTask[]): TaskDisplayNoteGroup[] {
   const statusOrder: Array<ScrapedTask["status"]> = ["in-progress", "todo", "marker", "completed"];
