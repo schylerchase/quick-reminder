@@ -1,13 +1,13 @@
 # Quick Reminder
 
-Natural-language reminders with native OS notifications for Obsidian. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
+Natural-language reminders for Obsidian, with desktop notifications where available and in-app notices on mobile. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
 
-This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, native notifications, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder will optionally call its task editor when you create a task reminder from the editor.
+This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, local reminder notices, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder will optionally call its task editor when you create a task reminder from the editor.
 
 ## What it does
 
 - **Global hotkey -> tiny modal** -> type `call mom tomorrow 3pm` -> saved + scheduled.
-- **Native OS notifications** via the Electron notification API (macOS, Windows, Linux).
+- **Local reminder notices** - desktop notifications when the Web Notification API is available, and Obsidian in-app notices on iPad, iPhone, Android, or unsupported notification environments.
 - **Chrono-node NLP parser** - handles `tomorrow`, `next tuesday at 10am`, `in 2 hours`, `friday morning`, etc.
 - **Markdown mirror** - keeps a `Reminders.md` file in your vault synced with pending + notified reminders.
 - **Launch-time catch-up** - fires any reminders that went overdue while Obsidian was closed.
@@ -68,11 +68,78 @@ If installed manually, replace `main.js`, `manifest.json`, and `styles.css` in t
 | Insert task sections | Command palette -> "Insert task sections" |
 | Change snooze default, mirror file, etc. | Settings -> Quick Reminder |
 
+## How to use Quick Reminder
+
+Quick Reminder is easiest to understand as a right-sidebar task cockpit for the note you are already working in.
+
+![Quick Reminder task manager with sandbox demo tasks](docs/screenshots/quick-reminder-task-manager.jpeg)
+
+Screenshot annotations:
+
+1. **Scan** refreshes the task list from your vault. Use it after large edits or if a task does not appear.
+2. **Dashboard** opens the same task manager as a main workspace tab when you want more room.
+3. **New** creates either a plain Markdown task or a task-backed reminder.
+4. **Summary counters** show overdue reminders, upcoming reminders, visible tasks, and ignored tasks.
+5. **Filters** narrow the list by text, scope, source type, and sort order.
+6. **Vault Tasks** groups tasks by note, then by heading/status so you can work from the sidebar without moving lines around in the note.
+7. **Task cards** expose the common actions: show the source line, add notes, move status, edit, delete, ignore, or add a reminder.
+8. **Add reminder** appears when Quick Reminder detects a future time in the task text, such as `tomorrow 9am` or `Friday 2pm`.
+
+### Common workflow: capture a reminder quickly
+
+1. Press your Quick Reminder hotkey or run **Quick Reminder: Quick capture reminder**.
+2. Type a natural-language reminder:
+   ```text
+   renew client certificate tomorrow 9am
+   ```
+3. Save it. Quick Reminder stores the reminder, schedules it locally, and mirrors it to the configured reminder note when Markdown mirroring is enabled.
+
+Use this for fast, standalone reminders that do not need to live beside a source task.
+
+### Common workflow: work tasks from the sidebar
+
+1. Open a Markdown note that contains tasks.
+2. Click the Quick Reminder ribbon icon or run **Quick Reminder: Open reminder manager**.
+3. Click **Scan** if the task list has not refreshed yet.
+4. Use **In progress**, **Done**, or **To do** directly on each task card.
+5. Use **Show** when you want to jump back to the exact note line.
+
+Quick Reminder updates the original Markdown task line. It does not create a separate task database.
+
+### Common workflow: turn a task into a reminder
+
+1. Write a normal task with a future time:
+   ```md
+   - [ ] follow up on the backup report tomorrow 10am
+   ```
+2. Open the manager and find the task card.
+3. Click **Add reminder**.
+4. Quick Reminder links the reminder back to that task so the dashboard can show that the task already has reminder context.
+
+If **Add reminder** is disabled, the task probably does not contain a future time phrase. Add something like `in 30 minutes`, `tomorrow 9am`, or `Friday 2pm`.
+
+### Common workflow: use headings as task groups
+
+Quick Reminder reads the nearest Markdown heading above each task and uses that as the category.
+
+```md
+## Today
+
+- [ ] Review backup report tomorrow 9am
+- [/] Draft screenshot checklist
+
+## Later
+
+- [ ] Send release note Friday 2pm
+```
+
+In the sidebar, this becomes separate **Today** and **Later** groups. Use this when you want the dashboard organized without physically moving tasks around.
+
 ### Use guide
 
 Quick Reminder has two related surfaces:
 
-- **Reminder manager** - manages scheduled reminders with due dates and OS notifications.
+- **Reminder manager** - manages scheduled reminders with due dates and local reminder notices.
 - **Task dashboard** - scans markdown notes for task lines and lets you update them in place.
 
 Open the sidebar manager when you want a companion panel beside your note. Open **Dashboard** when you want the task manager as a main-screen tab.
@@ -87,7 +154,7 @@ The dashboard remembers the last scope, search, source filter, sort order, and a
 2. Type a task with a natural-language time, such as `call Alex tomorrow 3pm`.
 3. Save it.
 
-The reminder is scheduled using the local desktop notification system. If Obsidian was closed when the reminder became due, Quick Reminder catches it on next launch.
+The reminder is scheduled locally inside Obsidian. On desktop, Quick Reminder uses OS/browser notifications when permission is available. On iPad, iPhone, Android, or unsupported notification environments, it shows an Obsidian in-app notice instead. If Obsidian was closed when the reminder became due, Quick Reminder catches it on next launch.
 
 ### Work tasks from notes
 
@@ -199,6 +266,54 @@ Auto-insert only runs for empty new markdown notes inside those configured folde
 
 If no time phrase is detected, the modal warns you. Add something like `in 30 minutes` or `tomorrow 9am`.
 
+## FAQ with screenshots
+
+The task manager screenshot above is the reference image for these answers.
+
+### Does Quick Reminder work on iPad or mobile?
+
+Yes. The plugin is marked `isDesktopOnly: false` and works in Obsidian mobile. On desktop, it uses desktop notifications when the Web Notification API is available. On iPad, iPhone, Android, or unsupported notification environments, it uses an Obsidian in-app notice.
+
+### Will reminders fire if Obsidian is closed?
+
+Not at the exact due time. Quick Reminder schedules reminders inside Obsidian, so Obsidian needs to be open for in-session timing. If Obsidian was closed when a reminder became due, Quick Reminder catches it and shows it the next time Obsidian opens.
+
+### Do I need the Tasks plugin?
+
+No. Quick Reminder works with normal Markdown task lines by itself. If the Tasks plugin is installed and enabled, Quick Reminder can optionally open the Tasks editor for task-backed reminders.
+
+### Why is Add reminder disabled for a task?
+
+Quick Reminder only enables **Add reminder** when it can detect a future time. This works:
+
+```md
+- [ ] send status update tomorrow 3pm
+```
+
+This does not:
+
+```md
+- [ ] send status update
+```
+
+Add a phrase like `tomorrow 3pm`, `in 2 hours`, or `Friday morning`.
+
+### Why did the task stay under the same heading after I marked it done?
+
+Quick Reminder keeps your source note stable. It changes the checkbox and status metadata, then reorganizes the dashboard visually. It does not move Markdown lines between headings unless you edit the note yourself.
+
+### Where are reminders stored?
+
+Reminder data is saved in the plugin data file managed by Obsidian. If **Mirror to Markdown** is enabled, Quick Reminder also keeps a generated reminder note in your vault so you can see pending and notified reminders as plain text.
+
+### Can I hide tasks without deleting them?
+
+Yes. Click **Ignore** on a task card. Ignored tasks stay in the source note but are hidden from the normal dashboard until you unignore them.
+
+### When should I use the sidebar versus Dashboard?
+
+Use the sidebar when you are working beside a note. Use **Dashboard** when you want the task manager as a full main tab with more space for filtering and bulk review.
+
 ## Integrations
 
 - **Tasks plugin (optional).** If the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) is installed and enabled, Quick Reminder will open its task-editor modal when you create a task reminder from the editor. If it is missing or disabled, Quick Reminder falls back to its own capture modal. Toggle this under **Settings -> Quick Reminder -> Tasks plugin integration**.
@@ -211,7 +326,7 @@ src/
   main.ts        # Plugin entry, commands, settings tab
   modal.ts       # Quick-capture UI + pending list UI
   parser.ts      # chrono-node wrapper, strips date phrase from task text
-  scheduler.ts   # setTimeout queue + native notification firing
+  scheduler.ts   # setTimeout queue + desktop notification / in-app notice firing
   store.ts       # Plugin data persistence + Reminders.md mirror
   taskScanner.ts # Vault Markdown task/TODO scanner
   types.ts       # Shared types + defaults
@@ -242,8 +357,7 @@ The plugin does not include an in-app self-updater. Updates are installed by BRA
 
 ## Known limits
 
-- **Desktop only.** Mobile push needs a cloud relay.
-- **Requires Obsidian running** for in-session reminders. If Obsidian is closed, reminders fire on next launch.
+- **Mobile-compatible, not background push.** Quick Reminder runs on Obsidian mobile, including iPad, and uses in-app Obsidian notices there. Timers run while Obsidian is open; if Obsidian is closed, due reminders fire on next launch.
 - **No recurring reminders yet.** One-shot only.
 - **No notification actions** (snooze/done from notification itself). Click opens Obsidian; manage via the reminder manager.
 
@@ -252,5 +366,5 @@ The plugin does not include an in-app self-updater. Updates are installed by BRA
 - Recurring reminders (`every monday 9am`)
 - Pre-reminder lead time (notify 15 min before)
 - Outlook email -> reminder bridge
-- Mobile push via a self-hostable relay
+- Better mobile notification behavior if Obsidian exposes reliable background notification APIs
 - Daily agenda auto-insert into daily note
