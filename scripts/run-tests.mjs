@@ -18,6 +18,7 @@ const testEntries = [
   "tests/managedTasksOps.test.ts",
   "tests/ribbonOrder.test.ts",
   "tests/starterBoard.test.ts",
+  "tests/projectPlanner.test.ts",
 ];
 
 const outdir = ".tmp-tests";

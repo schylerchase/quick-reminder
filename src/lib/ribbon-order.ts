@@ -19,3 +19,7 @@ export function restoreRibbonIconIndex(
   const siblings = Array.from(parent.children).filter((child) => child !== iconEl);
   parent.insertBefore(iconEl, siblings[nextIndex] ?? null);
 }
+
+export function shouldManageRibbonIconIndex(isMobileApp: boolean): boolean {
+  return !isMobileApp;
+}

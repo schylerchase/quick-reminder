@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder Mobile QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        --font-ui-small: 13px;
+        --font-ui-smaller: 11px;
+        --font-monospace: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .qa-phone {
+        width: 100%;
+        max-width: 430px;
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+
+      .qa-source-shell {
+        position: relative;
+        min-height: 100vh;
+        overflow: hidden;
+      }
+
+      .workspace-drawer.mod-left {
+        position: absolute;
+        inset: 0 auto 0 0;
+        z-index: 4;
+        width: 78%;
+        padding: 18px;
+        background: #151a21;
+        border-right: 1px solid var(--background-modifier-border);
+        box-shadow: 24px 0 48px rgb(0 0 0 / 0.42);
+        transform: translateX(-106%);
+        transition: transform 120ms ease;
+      }
+
+      .workspace-drawer.mod-left.is-open {
+        transform: translateX(0);
+      }
+
+      .qa-file-tree {
+        display: grid;
+        gap: 14px;
+        color: var(--text-muted);
+        font-size: 17px;
+      }
+
+      .qa-source-note {
+        margin-left: 18%;
+        padding: 18px 16px;
+        line-height: 1.45;
+      }
+
+      .qa-source-note h1 {
+        margin: 0 0 16px;
+        color: var(--text-accent);
+        font-size: 22px;
+      }
+
+      .qa-modal-stage {
+        display: grid;
+        place-items: start center;
+        min-height: 100vh;
+        padding: 84px 12px 24px;
+        box-sizing: border-box;
+        background: linear-gradient(90deg, #0f1218 0, #151922 100%);
+      }
+
+      .modal {
+        width: min(100%, 560px);
+        max-width: calc(100vw - 24px);
+        padding: 18px;
+        border-radius: 22px 22px 0 0;
+        background: var(--background-primary);
+        box-shadow: 0 18px 60px rgb(0 0 0 / 0.48);
+      }
+    </style>
+  </head>
+  <body class="theme-dark is-mobile is-phone">
+    <main class="qa-phone qr-view qr-view-dashboard qr-mobile-compact-tasks" data-qa="fixture-root">
+      <section class="qr-view-section" data-qa="task-list" aria-label="Open tasks">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span>Open</span></span>
+          <span class="qr-view-section-count">4/4</span>
+        </div>
+
+        <article class="qr-view-row qr-scraped-row qr-task-status-todo qr-mobile-task-collapsed" data-qa="task-card">
+          <div class="qr-view-row-body qr-mobile-task-toggle" role="button" tabindex="0" aria-expanded="false" aria-label="Expand task details: Conduct SOC handoff">
+            <span class="qr-task-mobile-caret" aria-hidden="true">⌄</span>
+            <div class="qr-task-badges">
+              <span class="qr-task-badge qr-task-status-badge qr-task-status-todo">To Do</span>
+              <span class="qr-task-badge qr-task-kind-badge">Checkbox</span>
+              <span class="qr-task-badge qr-task-context-badge">3 notes</span>
+            </div>
+            <div class="qr-view-row-text qr-task-main-text">Conduct SOC handoff and documentation with client IT #project/lamaitre #phase/security-monitoring 2026-05-09</div>
+            <div class="qr-task-context-details qr-task-context-inline">
+              <div class="qr-task-context-summary-label">3 subtasks / notes</div>
+              <div class="qr-task-context-notes">
+                <div class="qr-task-context-note">Confirm log source ownership with client IT.</div>
+                <div class="qr-task-context-note">Attach final onboarding notes and retention decisions.</div>
+                <div class="qr-task-context-note">Capture next steps for the project manager.</div>
+              </div>
+            </div>
+            <div class="qr-view-row-when">Line 35</div>
+          </div>
+          <div class="qr-view-row-actions">
+            <button class="qr-row-btn" type="button" data-qa="show-source">Show</button>
+            <button class="qr-row-btn" type="button">Note</button>
+            <button class="qr-row-btn qr-progress-btn" type="button">In progress</button>
+            <button class="qr-row-btn qr-done-btn" type="button">Done</button>
+            <button class="qr-row-btn" type="button">Edit</button>
+            <button class="qr-row-btn qr-view-del" type="button">Delete</button>
+            <button class="qr-row-btn qr-ignore-btn" type="button">Ignore</button>
+            <button class="qr-row-btn qr-no-time-btn" type="button" disabled>No time</button>
+          </div>
+        </article>
+
+        <article class="qr-view-row qr-scraped-row qr-task-status-in-progress qr-mobile-task-collapsed" data-qa="task-card">
+          <div class="qr-view-row-body qr-mobile-task-toggle" role="button" tabindex="0" aria-expanded="false" aria-label="Expand task details: Establish endpoint visibility">
+            <span class="qr-task-mobile-caret" aria-hidden="true">⌄</span>
+            <div class="qr-task-badges">
+              <span class="qr-task-badge qr-task-status-badge qr-task-status-in-progress">In Progress</span>
+              <span class="qr-task-badge qr-task-kind-badge">Checkbox</span>
+            </div>
+            <div class="qr-view-row-text qr-task-main-text">Establish endpoint visibility across domain controllers #project/lamaitre #phase/security-monitoring 2026-05-05</div>
+            <div class="qr-view-row-when">Line 36</div>
+          </div>
+          <div class="qr-view-row-actions">
+            <button class="qr-row-btn" type="button">Show</button>
+            <button class="qr-row-btn" type="button">Note</button>
+            <button class="qr-row-btn qr-progress-btn" type="button">To do</button>
+            <button class="qr-row-btn qr-done-btn" type="button">Done</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="qa-source-shell" data-qa="source-shell" hidden>
+        <aside class="workspace-drawer mod-left is-open" data-qa="mobile-drawer" aria-label="Files drawer">
+          <div class="qa-file-tree">
+            <strong>Files</strong>
+            <span>Projects</span>
+            <span>LeMaitre - SO0164</span>
+            <span>Meeting Notes</span>
+          </div>
+        </aside>
+        <article class="qa-source-note" data-qa="source-note" aria-label="Source note">
+          <h1>Security Monitoring</h1>
+          <p>Tasks and implementation notes should be visible after Show opens the source note.</p>
+        </article>
+      </section>
+
+      <section class="qa-modal-stage" data-qa="edit-stage" hidden>
+        <div class="modal">
+          <div class="qr-modal qr-task-edit-modal" data-qa="edit-modal">
+            <div class="qr-modal-header"><h2>Edit task</h2></div>
+            <div class="qr-task-edit-title">Conduct SOC handoff and documentation with client IT #project/lamaitre #phase/security-monitoring 2026-05-09</div>
+            <div class="qr-field">
+              <label class="qr-field-label">Status</label>
+              <div class="qr-status-pills">
+                <button class="qr-status-pill is-active" type="button"><span class="qr-status-pill-icon">○</span><span>To Do</span></button>
+                <button class="qr-status-pill" type="button"><span class="qr-status-pill-icon">◌</span><span>In Progress</span></button>
+                <button class="qr-status-pill" type="button"><span class="qr-status-pill-icon">✓</span><span>Done</span></button>
+              </div>
+            </div>
+            <div class="qr-field">
+              <label class="qr-field-label" for="qa-task-note">Notes</label>
+              <textarea id="qa-task-note" class="qr-input qr-input-textarea qr-task-note-edit-input">- blocked by firewall change
+- ask vendor for installer flag
+verify on prod hosts</textarea>
+            </div>
+            <div class="qr-modal-actions">
+              <button class="qr-secondary-btn" type="button">Cancel</button>
+              <button class="qr-primary-btn" type="button">Save</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      for (const toggle of document.querySelectorAll(".qr-mobile-task-toggle")) {
+        toggle.addEventListener("click", () => {
+          const row = toggle.closest(".qr-scraped-row");
+          const expanded = row.classList.toggle("qr-mobile-task-expanded");
+          row.classList.toggle("qr-mobile-task-collapsed", !expanded);
+          toggle.setAttribute("aria-expanded", String(expanded));
+          const caret = toggle.querySelector(".qr-task-mobile-caret");
+          if (caret) caret.textContent = expanded ? "⌃" : "⌄";
+        });
+      }
+
+      document.querySelector("[data-qa='show-source']").addEventListener("click", (event) => {
+        event.stopPropagation();
+        document.querySelector("[data-qa='task-list']").hidden = true;
+        document.querySelector("[data-qa='source-shell']").hidden = false;
+        document.querySelector("[data-qa='mobile-drawer']").classList.remove("is-open");
+      });
+
+      window.showEditModal = () => {
+        document.querySelector("[data-qa='task-list']").hidden = true;
+        document.querySelector("[data-qa='edit-stage']").hidden = false;
+      };
+    </script>
+  </body>
+</html>

@@ -24,6 +24,7 @@ import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
 import { saveScheduledReminder } from "./reminderTransaction";
 import { QuickCaptureModal } from "./modal";
+import { ProjectPlannerModal } from "./projectPlannerModal";
 import { parseReminder } from "./parser";
 import { TaskScanner } from "./taskScanner";
 import {
@@ -38,6 +39,10 @@ import {
   getCategoryInputInitialPath,
 } from "./lib/taskTarget";
 import {
+  ProjectPlan,
+  validateProjectPlan,
+} from "./lib/projectPlanner";
+import {
   openMainViewLeaf,
   openSidebarViewLeaf,
   findOrReuseMainPaneLeaf,
@@ -50,6 +55,23 @@ import {
 } from "./workspace";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
+
+function shouldUseMobileTaskViewport(): boolean {
+  if (
+    typeof document !== "undefined" &&
+    (
+      document.body.classList.contains("is-mobile") ||
+      document.body.classList.contains("is-phone")
+    )
+  ) {
+    return true;
+  }
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(max-width: 480px)").matches;
+}
+
 type ReminderViewState = {
   taskScope: TaskDashboardScope;
   selectedFolderPath: string | null;
@@ -66,6 +88,7 @@ export class ReminderView extends ItemView {
   };
   private collapsedSections = new Set<string>(["Completed vault tasks", "Ignored", "History"]);
   private collapsedPhases = new Set<string>();
+  private expandedTaskCards = new Set<string>();
   private phasePageLimits = new Map<string, number>();
   private phaseSearchQueries = new Map<string, string>();
   private activePhaseSearchKey: string | null = null;
@@ -208,6 +231,7 @@ export class ReminderView extends ItemView {
     container.empty();
     container.addClass("qr-view");
     container.toggleClass("qr-view-dashboard", this.isMainWorkspaceView());
+    container.toggleClass("qr-mobile-compact-tasks", this.shouldUseMobileTaskLayout());
 
     const pending = this.store.pending;
     const now = Date.now();
@@ -1283,13 +1307,30 @@ export class ReminderView extends ItemView {
     ignoredNote = "",
     showFilePath = true,
   ): void {
+    const isMobileTaskLayout = this.shouldUseMobileTaskLayout();
+    const isMobileExpanded = isMobileTaskLayout && this.expandedTaskCards.has(task.id);
     const row = parent.createDiv({ cls: "qr-view-row qr-scraped-row" });
     row.dataset.qrTaskSearch = getTaskSearchText(task);
     row.addClass(`qr-task-status-${getTaskStatusClassName(task.status)}`);
     row.toggleClass("qr-view-row-done", task.completed);
     row.toggleClass("qr-view-row-ignored", isIgnored);
     row.toggleClass("qr-view-row-highlight", task.id === this.highlightedTaskId);
+    row.toggleClass("qr-mobile-task-collapsed", isMobileTaskLayout && !isMobileExpanded);
+    row.toggleClass("qr-mobile-task-expanded", isMobileExpanded);
     const body = row.createDiv({ cls: "qr-view-row-body" });
+    if (isMobileTaskLayout) {
+      body.addClass("qr-mobile-task-toggle");
+      body.setAttr("role", "button");
+      body.setAttr("tabindex", "0");
+      body.setAttr("aria-expanded", String(isMobileExpanded));
+      body.setAttr("aria-label", `${isMobileExpanded ? "Collapse" : "Expand"} task details: ${task.text}`);
+    }
+    const mobileCaret = isMobileTaskLayout
+      ? body.createSpan({ cls: "qr-task-mobile-caret" })
+      : null;
+    if (mobileCaret) {
+      setIcon(mobileCaret, isMobileExpanded ? "chevron-up" : "chevron-down");
+    }
     const badges = body.createDiv({ cls: "qr-task-badges" });
     badges.createSpan({
       text: getTaskStatusTitle(task.status),
@@ -1304,14 +1345,7 @@ export class ReminderView extends ItemView {
     }
     body.createDiv({ text: task.text, cls: "qr-view-row-text qr-task-main-text" });
     if (task.contextNotes.length > 0) {
-      const notes = body.createDiv({ cls: "qr-task-context-notes" });
-      const visibleContextNotes = task.contextNotes.slice(0, this.isMainWorkspaceView() ? 5 : 3);
-      for (const note of visibleContextNotes) {
-        notes.createDiv({ text: note, cls: "qr-task-context-note" });
-      }
-      if (task.contextNotes.length > visibleContextNotes.length) {
-        notes.createDiv({ text: `${task.contextNotes.length - visibleContextNotes.length} more notes`, cls: "qr-task-context-more" });
-      }
+      this.renderTaskContextDetails(body, task);
     }
     const source = task.kind === "marker" && task.marker ? `${task.marker} - ` : "";
     body.createDiv({
@@ -1321,6 +1355,7 @@ export class ReminderView extends ItemView {
     if (isIgnored && ignoredNote) {
       body.createDiv({ text: ignoredNote, cls: "qr-view-row-note" });
     }
+    this.wireMobileTaskCardExpansion(row, body, task, mobileCaret);
 
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
     actions.createEl("button", { text: "Show", cls: "qr-row-btn" }).onclick = async () => {
@@ -1433,6 +1468,81 @@ export class ReminderView extends ItemView {
       await saveScheduledReminder(this.store, this.scheduler, reminder);
       new Notice(`Reminder added from ${task.filePath}:${task.line}`);
     };
+  }
+
+  private renderTaskContextDetails(body: HTMLElement, task: ScrapedTask): void {
+    if (!this.shouldUseMobileTaskLayout()) {
+      this.renderDesktopTaskContextNotes(body, task);
+      return;
+    }
+
+    const details = body.createDiv({ cls: "qr-task-context-details qr-task-context-inline" });
+    details.createDiv({
+      text: getTaskContextSummaryText(task.contextNotes.length),
+      cls: "qr-task-context-summary-label",
+    });
+
+    const notes = details.createDiv({ cls: "qr-task-context-notes" });
+    for (const note of task.contextNotes) {
+      notes.createDiv({ text: note, cls: "qr-task-context-note" });
+    }
+  }
+
+  private wireMobileTaskCardExpansion(
+    row: HTMLElement,
+    toggleEl: HTMLElement,
+    task: ScrapedTask,
+    caret: HTMLElement | null,
+  ): void {
+    if (!this.shouldUseMobileTaskLayout()) return;
+
+    const setExpanded = (expanded: boolean) => {
+      row.toggleClass("qr-mobile-task-expanded", expanded);
+      row.toggleClass("qr-mobile-task-collapsed", !expanded);
+      toggleEl.setAttr("aria-expanded", String(expanded));
+      toggleEl.setAttr("aria-label", `${expanded ? "Collapse" : "Expand"} task details: ${task.text}`);
+      if (caret) {
+        setIcon(caret, expanded ? "chevron-up" : "chevron-down");
+      }
+      if (expanded) {
+        this.expandedTaskCards.add(task.id);
+      } else {
+        this.expandedTaskCards.delete(task.id);
+      }
+    };
+
+    toggleEl.onclick = (event) => {
+      if (this.isTaskCardInteractiveTarget(event.target)) return;
+      setExpanded(!this.expandedTaskCards.has(task.id));
+    };
+    toggleEl.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (this.isTaskCardInteractiveTarget(event.target)) return;
+      event.preventDefault();
+      setExpanded(!this.expandedTaskCards.has(task.id));
+    };
+  }
+
+  private isTaskCardInteractiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return target.closest(
+      "button, input, textarea, select, option, a, summary, details, .qr-view-row-actions, .qr-task-context-notes, .qr-view-row-note",
+    ) !== null;
+  }
+
+  private renderDesktopTaskContextNotes(body: HTMLElement, task: ScrapedTask): void {
+    const notes = body.createDiv({ cls: "qr-task-context-notes" });
+    const visibleContextNotes = task.contextNotes.slice(0, this.isMainWorkspaceView() ? 5 : 3);
+    for (const note of visibleContextNotes) {
+      notes.createDiv({ text: note, cls: "qr-task-context-note" });
+    }
+    if (task.contextNotes.length > visibleContextNotes.length) {
+      notes.createDiv({ text: `${task.contextNotes.length - visibleContextNotes.length} more notes`, cls: "qr-task-context-more" });
+    }
+  }
+
+  private shouldUseMobileTaskLayout(): boolean {
+    return shouldUseMobileTaskViewport();
   }
 
   private hasPendingReminderForTask(task: ScrapedTask): boolean {
@@ -1577,6 +1687,13 @@ export class ReminderView extends ItemView {
       this.app,
       () => this.openNewTaskModal(false),
       () => this.openNewTaskModal(true),
+      () => this.openProjectPlannerModal(),
+    ).open();
+  }
+
+  private openProjectPlannerModal(): void {
+    new ProjectPlannerModal(this.app, (plan, markdown) =>
+      this.createProjectFromPlanner(plan, markdown),
     ).open();
   }
 
@@ -1661,6 +1778,51 @@ export class ReminderView extends ItemView {
     new Notice(withReminder ? "Task and reminder created" : "Task created");
   }
 
+  private async createProjectFromPlanner(
+    plan: ProjectPlan,
+    markdown: string,
+  ): Promise<boolean> {
+    const errors = validateProjectPlan(plan);
+    if (errors.length > 0) {
+      new Notice(errors[0]);
+      return false;
+    }
+
+    const path = plan.filePath;
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing !== null) {
+      new Notice(`Quick Reminder: ${path} already exists.`);
+      return false;
+    }
+
+    try {
+      await this.ensureCategoryParentFolders(path);
+      const file = await this.app.vault.create(path, markdown);
+      await this.openProjectNote(file);
+      await this.refreshScrapedTasks();
+      await this.render();
+      new Notice(`Project note created at ${path}`);
+      return true;
+    } catch (error) {
+      console.error("Quick Reminder project planner create failed", error);
+      new Notice(`Quick Reminder: could not create ${path}.`);
+      return false;
+    }
+  }
+
+  private async openProjectNote(file: TFile): Promise<void> {
+    const leaf = this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf();
+    if (!leaf) return;
+
+    if (!(leaf.view instanceof MarkdownView) || leaf.view.file?.path !== file.path) {
+      await leaf.openFile(file, { active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.collapseMobileWorkspaceDrawers();
+    this.closeDuplicateMainFileLeaves(file, leaf, [0, 100, 300]);
+  }
+
   private async updateTaskStatus(
     task: ScrapedTask,
     status: "todo" | "in-progress" | "completed",
@@ -1708,12 +1870,27 @@ export class ReminderView extends ItemView {
     }
     await this.app.workspace.revealLeaf(leaf);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.collapseMobileWorkspaceDrawers();
 
     if (leaf.view instanceof MarkdownView) {
       leaf.view.editor.setCursor({ line: task.line - 1, ch: 0 });
       leaf.view.editor.focus();
       this.closeDuplicateMainFileLeaves(file, leaf, [0, 100, 300]);
     }
+  }
+
+  private collapseMobileWorkspaceDrawers(): void {
+    if (!this.shouldUseMobileTaskLayout()) return;
+    const workspace = this.app.workspace as App["workspace"] & {
+      leftSplit?: { collapse?: () => void };
+      rightSplit?: { collapse?: () => void };
+    };
+    workspace.leftSplit?.collapse?.();
+    workspace.rightSplit?.collapse?.();
+    window.setTimeout(() => {
+      workspace.leftSplit?.collapse?.();
+      workspace.rightSplit?.collapse?.();
+    }, 80);
   }
 
   private closeDuplicateMainFileLeaves(file: TFile | null, keepLeaf: WorkspaceLeaf, delays = [0]): void {
@@ -2154,7 +2331,9 @@ class IgnoreTaskModal extends Modal {
       void this.submit();
     };
 
-    window.setTimeout(() => this.noteEl.focus(), 0);
+    if (!shouldUseMobileTaskViewport()) {
+      window.setTimeout(() => this.noteEl.focus(), 0);
+    }
   }
 
   onClose(): void {
@@ -2282,7 +2461,9 @@ class TaskContextNoteModal extends Modal {
       void this.submit();
     };
 
-    window.setTimeout(() => this.noteEl.focus(), 0);
+    if (!shouldUseMobileTaskViewport()) {
+      window.setTimeout(() => this.noteEl.focus(), 0);
+    }
   }
 
   private renderStatusPill(value: TaskStatusPick, icon: string, label: string): void {
@@ -2324,6 +2505,7 @@ class NewItemModal extends Modal {
     app: App,
     private onTask: () => void,
     private onReminder: () => void,
+    private onProjectPlanner: () => void,
   ) {
     super(app);
   }
@@ -2346,6 +2528,10 @@ class NewItemModal extends Modal {
     this.renderPick(grid, "alarm-clock", "Reminder", "Notify me at a specific time", () => {
       this.close();
       this.onReminder();
+    });
+    this.renderPick(grid, "folder-kanban", "Project Planner", "Create a project note from an outline", () => {
+      this.close();
+      this.onProjectPlanner();
     });
   }
 
@@ -2772,6 +2958,11 @@ function getTaskStatusTitle(status: ScrapedTask["status"]): string {
     return "Markers";
   }
   return "To Do";
+}
+
+function getTaskContextSummaryText(count: number): string {
+  if (count === 1) return "1 subtask / note";
+  return `${count} subtasks / notes`;
 }
 
 function getTaskCategoryTitle(task: ScrapedTask, statusTitle: string): string {

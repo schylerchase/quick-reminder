@@ -6,6 +6,7 @@ import {
   Editor,
   MarkdownView,
   Notice,
+  Platform,
   TFile,
   TFolder,
   WorkspaceLeaf,
@@ -44,6 +45,7 @@ import {
 import {
   getRibbonIconIndex,
   restoreRibbonIconIndex,
+  shouldManageRibbonIconIndex,
 } from "./lib/ribbon-order";
 import {
   buildStarterBoardMarkdown,
@@ -124,6 +126,7 @@ export default class QuickReminderPlugin extends Plugin {
       const ribbonIcon = this.addRibbonIcon("list-checks", "Quick Reminder: open manager", () => {
         void this.activateView();
       });
+      if (!shouldManageRibbonIconIndex(Platform.isMobileApp)) return;
       this.restoreRibbonPosition(ribbonIcon);
       this.trackRibbonPosition(ribbonIcon);
     });

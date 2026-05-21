@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getRibbonIconIndex, restoreRibbonIconIndex } from "../src/lib/ribbon-order";
+import {
+  getRibbonIconIndex,
+  restoreRibbonIconIndex,
+  shouldManageRibbonIconIndex,
+} from "../src/lib/ribbon-order";
 
 test("restoreRibbonIconIndex moves a ribbon icon back to its saved position", () => {
   const parent = new MockParent();
@@ -25,6 +29,11 @@ test("restoreRibbonIconIndex clamps positions past the end", () => {
 
   assert.deepEqual(parent.children, [other, reminder]);
   assert.equal(getRibbonIconIndex(reminder as never), 1);
+});
+
+test("shouldManageRibbonIconIndex leaves mobile placement to Obsidian", () => {
+  assert.equal(shouldManageRibbonIconIndex(true), false);
+  assert.equal(shouldManageRibbonIconIndex(false), true);
 });
 
 class MockParent {

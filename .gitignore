@@ -1,5 +1,6 @@
 node_modules/
 .tmp-tests/
+ui-qa/test-results/
 .planning/
 main.js
 main.js.map

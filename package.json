@@ -8,6 +8,8 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
     "test": "node scripts/run-tests.mjs",
+    "ui-qa": "playwright test --config ui-qa/playwright.config.ts",
+    "ui-qa:update": "playwright test --config ui-qa/playwright.config.ts --update-snapshots",
     "release:package": "npm run build && node scripts/package-release.mjs"
   },
   "keywords": [
@@ -28,6 +30,8 @@
   },
   "homepage": "https://github.com/schylerchase/quick-reminder#readme",
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
+    "@playwright/test": "^1.60.0",
     "@types/node": "^20.11.0",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.25.12",
