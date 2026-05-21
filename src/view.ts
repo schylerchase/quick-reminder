@@ -34,6 +34,10 @@ import {
 import { getPhaseEditAction } from "./lib/phase-actions";
 import { filterTasksByQuery, getTaskSearchText } from "./lib/task-search";
 import {
+  DEFAULT_CATEGORY_FILE_PATH,
+  getCategoryInputInitialPath,
+} from "./lib/taskTarget";
+import {
   openMainViewLeaf,
   openSidebarViewLeaf,
   findOrReuseMainPaneLeaf,
@@ -113,6 +117,7 @@ export class ReminderView extends ItemView {
       file: TFile,
       transform: (content: string) => string,
     ) => Promise<void> = async () => {},
+    private openStarterBoard: () => Promise<void> = async () => {},
   ) {
     super(leaf);
   }
@@ -255,6 +260,28 @@ export class ReminderView extends ItemView {
     addBtn.onclick = () => {
       this.openNewItemModal();
     };
+
+    const shouldOfferStarterBoard =
+      pending.length === 0 &&
+      activeScraped.length === 0 &&
+      completedScraped.length === 0 &&
+      ignoredScraped.length === 0 &&
+      this.taskSearch.trim() === "" &&
+      this.sourceFilter === "all";
+    if (shouldOfferStarterBoard) {
+      const starterBtn = headerActions.createEl("button", {
+        text: "Start with template",
+        cls: "qr-view-secondary-btn",
+      });
+      starterBtn.onclick = async () => {
+        try {
+          await this.openStarterBoard();
+        } catch (error) {
+          console.error("Quick Reminder starter board failed", error);
+          new Notice("Quick Reminder could not create the starter board.");
+        }
+      };
+    }
 
     this.renderStats(
       container as HTMLElement,
@@ -631,7 +658,7 @@ export class ReminderView extends ItemView {
       }
     } else {
       for (const note of groupTasksByPhase(visibleTasks)) {
-        section.createDiv({ text: note.filePath, cls: "qr-task-note-title" });
+        this.renderTaskNoteHead(section, note.filePath);
         for (const phase of note.phases) {
           this.renderPhaseCard(section, note.filePath, phase, isIgnored, ignoredTaskNotes);
         }
@@ -674,6 +701,12 @@ export class ReminderView extends ItemView {
       event.preventDefault();
       toggle();
     };
+  }
+
+  private renderTaskNoteHead(parent: HTMLElement, filePath: string): void {
+    const head = parent.createDiv({ cls: "qr-task-note-head" });
+    head.createDiv({ text: filePath, cls: "qr-task-note-title" });
+    this.renderAddCategoryButton(head, filePath, true);
   }
 
   private isSectionCollapsed(title: string): boolean {
@@ -1011,79 +1044,236 @@ export class ReminderView extends ItemView {
       cls: "qr-phase-add-button",
     });
     button.onclick = () => {
-      this.swapForInput(row, button, "Task text…", async (value) => {
-        const text = value.trim();
-        if (text.length === 0) return;
-        const file = this.app.vault.getAbstractFileByPath(filePath);
-        if (!(file instanceof TFile)) {
-          new Notice(`Quick Reminder: cannot find ${filePath}`);
-          return;
-        }
-        await this.applyManagedBlockTransform(file, (content) =>
-          addTaskUnderHeading(content, phase.isInbox ? "Inbox" : phase.name, text),
-        );
-      });
+      this.swapForTaskInput(row, button, filePath, phase);
     };
   }
 
   private renderAddCategoryRow(parent: HTMLElement, filePath: string): void {
     const row = parent.createDiv({ cls: "qr-phase-add-category" });
-    const button = row.createEl("button", {
-      text: "+ Add category",
-      cls: "qr-phase-add-category-button",
+    this.renderAddCategoryButton(row, filePath);
+  }
+
+  private renderAddCategoryButton(parent: HTMLElement, filePath: string, compact = false): void {
+    const button = parent.createEl("button", {
+      text: compact ? "+ Category" : "+ Add category",
+      cls: compact ? "qr-note-add-category-button" : "qr-phase-add-category-button",
+      attr: {
+        type: "button",
+        "aria-label": `Add category to ${filePath}`,
+      },
     });
     button.onclick = () => {
-      this.swapForInput(
-        row,
-        button,
-        "Category name (creates ## heading in source)",
-        async (value) => {
-          const name = value.trim();
-          if (name.length === 0) return;
-          const file = this.app.vault.getAbstractFileByPath(filePath);
-          if (!(file instanceof TFile)) {
-            new Notice(`Quick Reminder: cannot find ${filePath}`);
-            return;
-          }
-          await this.applyManagedBlockTransform(file, (content) =>
-            appendHeading(content, name),
-          );
-        },
-      );
+      this.swapForCategoryInput(parent, button, getCategoryInputInitialPath(filePath, compact));
     };
   }
 
-  private swapForInput(
+  private swapForCategoryInput(
     row: HTMLElement,
     button: HTMLElement,
-    placeholder: string,
-    onSubmit: (value: string) => Promise<void>,
+    selectedFilePath: string,
   ): void {
     button.addClass("qr-hidden");
-    const input = row.createEl("input", {
+    row.addClass("is-adding-category");
+
+    const form = row.createDiv({ cls: "qr-category-add-form" });
+    const categoryInput = form.createEl("input", {
       type: "text",
-      cls: "qr-phase-add-input",
+      cls: "qr-phase-add-input qr-category-name-input",
     });
-    input.placeholder = placeholder;
-    input.focus();
+    categoryInput.placeholder = "Category name";
+
+    const targetWrap = form.createDiv({ cls: "qr-category-target-row" });
+    const targetInput = targetWrap.createEl("input", {
+      type: "text",
+      cls: "qr-phase-add-input qr-category-file-input",
+    });
+    targetInput.placeholder = `File path (blank = ${DEFAULT_CATEGORY_FILE_PATH})`;
+    targetInput.value = selectedFilePath;
+    this.attachMarkdownFileOptions(targetInput);
+
+    const actions = form.createDiv({ cls: "qr-category-add-actions" });
+    const save = actions.createEl("button", {
+      text: "Add",
+      cls: "qr-row-btn qr-category-save-btn",
+      attr: { type: "button" },
+    });
+    const cancel = actions.createEl("button", {
+      text: "Cancel",
+      cls: "qr-row-btn",
+      attr: { type: "button" },
+    });
+
     const restore = () => {
-      input.remove();
+      form.remove();
+      row.removeClass("is-adding-category");
       button.removeClass("qr-hidden");
     };
-    input.onblur = () => {
-      if (input.value.trim().length === 0) restore();
+
+    const submit = async () => {
+      const name = categoryInput.value.trim();
+      if (name.length === 0) {
+        categoryInput.focus();
+        return;
+      }
+      const file = await this.getManagedTaskTargetFile(targetInput.value);
+      if (!file) return;
+      restore();
+      await this.applyManagedBlockTransform(file, (content) =>
+        appendHeading(content, name),
+      );
+      await this.refreshScrapedTasks();
+      await this.render();
+      new Notice(`Category added to ${file.path}`);
     };
-    input.onkeydown = (event) => {
+
+    save.onclick = () => void submit();
+    cancel.onclick = restore;
+    form.onkeydown = (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        const value = input.value;
-        restore();
-        void onSubmit(value).then(() => this.render());
+        void submit();
       } else if (event.key === "Escape") {
         event.preventDefault();
         restore();
       }
     };
+    categoryInput.focus();
+  }
+
+  private swapForTaskInput(
+    row: HTMLElement,
+    button: HTMLElement,
+    selectedFilePath: string,
+    phase: TaskPhaseGroup,
+  ): void {
+    button.addClass("qr-hidden");
+    row.addClass("is-adding-task");
+
+    const form = row.createDiv({ cls: "qr-task-add-form" });
+    const taskInput = form.createEl("input", {
+      type: "text",
+      cls: "qr-phase-add-input qr-task-name-input",
+    });
+    taskInput.placeholder = "Task text";
+
+    const targetWrap = form.createDiv({ cls: "qr-task-target-row" });
+    const targetInput = targetWrap.createEl("input", {
+      type: "text",
+      cls: "qr-phase-add-input qr-task-file-input",
+    });
+    targetInput.placeholder = `File path (blank = ${DEFAULT_CATEGORY_FILE_PATH})`;
+    targetInput.value = selectedFilePath;
+    this.attachMarkdownFileOptions(targetInput);
+
+    const actions = form.createDiv({ cls: "qr-task-add-actions" });
+    const save = actions.createEl("button", {
+      text: "Add",
+      cls: "qr-row-btn qr-task-save-btn",
+      attr: { type: "button" },
+    });
+    const cancel = actions.createEl("button", {
+      text: "Cancel",
+      cls: "qr-row-btn",
+      attr: { type: "button" },
+    });
+
+    const restore = () => {
+      form.remove();
+      row.removeClass("is-adding-task");
+      button.removeClass("qr-hidden");
+    };
+
+    const submit = async () => {
+      const text = taskInput.value.trim();
+      if (text.length === 0) {
+        taskInput.focus();
+        return;
+      }
+      const file = await this.getManagedTaskTargetFile(targetInput.value);
+      if (!file) return;
+      const heading = phase.isInbox ? "Inbox" : phase.name;
+      restore();
+      await this.applyManagedBlockTransform(file, (content) =>
+        addTaskUnderHeading(content, heading, text),
+      );
+      await this.refreshScrapedTasks();
+      await this.render();
+      new Notice(`Task added to ${file.path}`);
+    };
+
+    save.onclick = () => void submit();
+    cancel.onclick = restore;
+    form.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void submit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        restore();
+      }
+    };
+    taskInput.focus();
+  }
+
+  private attachMarkdownFileOptions(input: HTMLInputElement): void {
+    const list = document.createElement("datalist");
+    list.id = `qr-category-files-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    for (const file of this.app.vault
+      .getMarkdownFiles()
+      .sort((a, b) => a.path.localeCompare(b.path))) {
+      const option = document.createElement("option");
+      option.value = file.path;
+      list.appendChild(option);
+    }
+    input.setAttr("list", list.id);
+    input.after(list);
+  }
+
+  private async getManagedTaskTargetFile(rawPath: string): Promise<TFile | null> {
+    const path = this.normalizeCategoryFilePath(rawPath);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) {
+      return existing;
+    }
+    if (existing !== null) {
+      new Notice(`Quick Reminder: ${path} is not a markdown file.`);
+      return null;
+    }
+
+    try {
+      await this.ensureCategoryParentFolders(path);
+      return await this.app.vault.create(path, this.getCategoryFileScaffold(path));
+    } catch (error) {
+      console.error("Quick Reminder category target create failed", error);
+      new Notice(`Quick Reminder: could not create ${path}.`);
+      return null;
+    }
+  }
+
+  private normalizeCategoryFilePath(rawPath: string): string {
+    const target = rawPath.trim() || DEFAULT_CATEGORY_FILE_PATH;
+    return normalizePath(/\.md$/i.test(target) ? target : `${target}.md`);
+  }
+
+  private async ensureCategoryParentFolders(path: string): Promise<void> {
+    const folders = path.split("/").slice(0, -1);
+    let current = "";
+    for (const folder of folders) {
+      current = current ? `${current}/${folder}` : folder;
+      const existing = this.app.vault.getAbstractFileByPath(current);
+      if (existing instanceof TFile) {
+        throw new Error(`${current} is a file`);
+      }
+      if (existing === null) {
+        await this.app.vault.createFolder(current);
+      }
+    }
+  }
+
+  private getCategoryFileScaffold(path: string): string {
+    const fileName = path.split("/").pop() ?? DEFAULT_CATEGORY_FILE_PATH;
+    const title = fileName.replace(/\.md$/i, "").trim() || "Tasks";
+    return `# ${title}\n`;
   }
 
   private renderScrapedRow(
@@ -1217,11 +1407,12 @@ export class ReminderView extends ItemView {
     const dueAt = parsed.dueAt;
     if (!hasFutureDueAt(dueAt)) {
       const noTimeBtn = actions.createEl("button", {
-        text: "No completion time set",
-        cls: "qr-row-btn",
+        text: "No time",
+        cls: "qr-row-btn qr-no-time-btn",
       });
       noTimeBtn.disabled = true;
       noTimeBtn.setAttr("aria-label", "Task exists, but no future reminder time was detected");
+      noTimeBtn.setAttr("title", "No completion time set");
       return;
     }
 
@@ -1390,17 +1581,15 @@ export class ReminderView extends ItemView {
   }
 
   private openNewTaskModal(withReminder: boolean): void {
-    const filePath = this.getTaskCreationFilePath();
-    if (!filePath) {
-      if (withReminder) {
-        new QuickCaptureModal(this.app, this.store, this.scheduler).open();
-      } else {
-        new Notice("Select Current file or open a markdown note before creating a task.");
-      }
-      return;
-    }
-    new NewTaskModal(this.app, withReminder, async (rawInput, status) => {
-      await this.createTaskFromInput(filePath, rawInput, withReminder, status);
+    const filePath = this.getTaskCreationFilePath() ?? DEFAULT_CATEGORY_FILE_PATH;
+    new NewTaskModal(this.app, withReminder, filePath, async (request) => {
+      await this.createTaskFromInput(
+        request.targetFilePath,
+        request.rawInput,
+        withReminder,
+        request.status,
+        request.details,
+      );
     }).open();
   }
 
@@ -1420,6 +1609,7 @@ export class ReminderView extends ItemView {
     rawInput: string,
     withReminder: boolean,
     status: "todo" | "in-progress" | "completed" = "todo",
+    details = "",
   ): Promise<void> {
     const parsed = parseReminder(rawInput);
     const taskText = withReminder ? parsed.text : rawInput.trim();
@@ -1432,8 +1622,13 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    const { taskText: plainTaskText, contextNotes } = splitTaskInput(taskText);
-    const task = await this.taskScanner.appendTask(filePath, plainTaskText, contextNotes);
+    const file = await this.getManagedTaskTargetFile(filePath);
+    if (!file) return;
+
+    const { taskText: plainTaskText, contextNotes: inlineContextNotes } = splitTaskInput(taskText);
+    const detailContextNotes = normalizeContextNoteLines(details.split(/\r?\n/));
+    const contextNotes = [...inlineContextNotes, ...detailContextNotes];
+    const task = await this.taskScanner.appendTask(file.path, plainTaskText, contextNotes);
     if (!task) {
       new Notice("Could not add task to the source note.");
       return;
@@ -2177,8 +2372,17 @@ class NewItemModal extends Modal {
 
 type TaskStatusPick = "todo" | "in-progress" | "completed";
 
+type NewTaskRequest = {
+  rawInput: string;
+  status: TaskStatusPick;
+  targetFilePath: string;
+  details: string;
+};
+
 class NewTaskModal extends Modal {
   private inputEl!: HTMLTextAreaElement;
+  private targetFileEl!: HTMLInputElement;
+  private detailsEl!: HTMLTextAreaElement;
   private previewEl!: HTMLDivElement;
   private statusEl!: HTMLDivElement;
   private status: TaskStatusPick = "todo";
@@ -2186,7 +2390,8 @@ class NewTaskModal extends Modal {
   constructor(
     app: App,
     private withReminder: boolean,
-    private onSubmit: (rawInput: string, status: TaskStatusPick) => void | Promise<void>,
+    private initialFilePath: string,
+    private onSubmit: (request: NewTaskRequest) => void | Promise<void>,
   ) {
     super(app);
   }
@@ -2199,12 +2404,12 @@ class NewTaskModal extends Modal {
       text: this.withReminder ? "New reminder task" : "New task",
     });
 
+    const statusField = this.contentEl.createDiv({ cls: "qr-field" });
+    statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
+    this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
+    this.renderStatusPill("todo", "circle", "To Do");
+    this.renderStatusPill("in-progress", "loader-circle", "In Progress");
     if (!this.withReminder) {
-      const statusField = this.contentEl.createDiv({ cls: "qr-field" });
-      statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
-      this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
-      this.renderStatusPill("todo", "circle", "To Do");
-      this.renderStatusPill("in-progress", "loader-circle", "In Progress");
       this.renderStatusPill("completed", "check-circle-2", "Done");
     }
 
@@ -2227,6 +2432,26 @@ class NewTaskModal extends Modal {
         void this.submit();
       }
     });
+
+    const options = this.contentEl.createDiv({ cls: "qr-task-options" });
+    const targetField = options.createDiv({ cls: "qr-field" });
+    targetField.createEl("label", { text: "Save to", cls: "qr-field-label" });
+    this.targetFileEl = targetField.createEl("input", {
+      type: "text",
+      cls: "qr-input qr-task-target-input",
+      value: this.initialFilePath,
+    });
+    this.targetFileEl.addEventListener("input", () => this.renderPreview());
+    this.attachMarkdownFileOptions(this.targetFileEl);
+
+    const detailsField = options.createDiv({ cls: "qr-field" });
+    detailsField.createEl("label", { text: "Details", cls: "qr-field-label" });
+    this.detailsEl = detailsField.createEl("textarea", {
+      cls: "qr-input qr-input-textarea qr-task-details-input",
+      placeholder: "Notes, links, context",
+    });
+    this.detailsEl.rows = 2;
+    this.detailsEl.addEventListener("input", () => this.renderPreview());
 
     this.previewEl = this.contentEl.createDiv({ cls: "qr-preview" });
     this.renderPreview();
@@ -2262,11 +2487,15 @@ class NewTaskModal extends Modal {
   private renderPreview(): void {
     this.previewEl.empty();
     const raw = this.inputEl.value.trim();
+    const target = this.targetFileEl?.value.trim() || DEFAULT_CATEGORY_FILE_PATH;
+    const detailsCount = normalizeContextNoteLines((this.detailsEl?.value ?? "").split(/\r?\n/)).length;
     if (!raw) {
       this.previewEl.createDiv({
         text: "Type a task description",
         cls: "qr-preview-status qr-preview-muted",
       });
+      this.previewRow("Save to", target);
+      if (detailsCount > 0) this.previewRow("Details", `${detailsCount} note${detailsCount === 1 ? "" : "s"}`);
       return;
     }
 
@@ -2278,6 +2507,8 @@ class NewTaskModal extends Modal {
         cls: `qr-preview-status ${ready ? "is-ready" : "needs-time"}`,
       });
       this.previewRow("Task", parsed.text || raw);
+      this.previewRow("Status", this.statusLabel());
+      this.previewRow("Save to", target);
       if (parsed.dueAt) {
         this.previewRow(
           "Time",
@@ -2305,7 +2536,9 @@ class NewTaskModal extends Modal {
       });
       this.previewRow("Task", raw);
       this.previewRow("Status", this.statusLabel());
+      this.previewRow("Save to", target);
     }
+    if (detailsCount > 0) this.previewRow("Details", `${detailsCount} note${detailsCount === 1 ? "" : "s"}`);
   }
 
   private previewRow(label: string, value: string, cls = ""): void {
@@ -2330,8 +2563,27 @@ class NewTaskModal extends Modal {
       new Notice("Enter a task.");
       return;
     }
-    await this.onSubmit(value, this.status);
+    await this.onSubmit({
+      rawInput: value,
+      status: this.status,
+      targetFilePath: this.targetFileEl.value.trim() || DEFAULT_CATEGORY_FILE_PATH,
+      details: this.detailsEl.value,
+    });
     this.close();
+  }
+
+  private attachMarkdownFileOptions(input: HTMLInputElement): void {
+    const list = document.createElement("datalist");
+    list.id = `qr-task-files-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    for (const file of this.app.vault
+      .getMarkdownFiles()
+      .sort((a, b) => a.path.localeCompare(b.path))) {
+      const option = document.createElement("option");
+      option.value = file.path;
+      list.appendChild(option);
+    }
+    input.setAttr("list", list.id);
+    input.after(list);
   }
 }
 

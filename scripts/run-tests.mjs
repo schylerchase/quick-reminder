@@ -13,9 +13,11 @@ const testEntries = [
   "tests/reminderTransaction.test.ts",
   "tests/phaseActions.test.ts",
   "tests/taskSearch.test.ts",
+  "tests/taskTarget.test.ts",
   "tests/managedTasksBlock.test.ts",
   "tests/managedTasksOps.test.ts",
   "tests/ribbonOrder.test.ts",
+  "tests/starterBoard.test.ts",
 ];
 
 const outdir = ".tmp-tests";

@@ -1,6 +1,7 @@
 export const REMINDER_CONFIG_DIR = ".reminder-config";
 export const DEFAULT_MIRROR_FILE_PATH = `${REMINDER_CONFIG_DIR}/Reminders.md`;
 export const LEGACY_MIRROR_FILE_PATH = "Reminders.md";
+export const DEFAULT_STARTER_BOARD_FILE_PATH = "Quick Reminder Dashboard.md";
 
 export interface Reminder {
   id: string;
@@ -66,6 +67,7 @@ export interface Settings {
   autoInsertManagedBlock: boolean;
   managedBlockAutoInsertFolders: string[];
   taskDashboardState: TaskDashboardState;
+  starterBoardFilePath: string;
   ribbonIconIndex: number | null;
 }
 
@@ -91,5 +93,6 @@ export const DEFAULT_SETTINGS: Settings = {
     sort: "page",
     search: "",
   },
+  starterBoardFilePath: DEFAULT_STARTER_BOARD_FILE_PATH,
   ribbonIconIndex: null,
 };

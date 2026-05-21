@@ -14,7 +14,12 @@ import {
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
 import { QuickCaptureModal, ReminderListModal } from "./modal";
-import { DEFAULT_MIRROR_FILE_PATH, PluginData, Reminder } from "./types";
+import {
+  DEFAULT_MIRROR_FILE_PATH,
+  DEFAULT_STARTER_BOARD_FILE_PATH,
+  PluginData,
+  Reminder,
+} from "./types";
 import { parseReminder } from "./parser";
 import { saveScheduledReminder } from "./reminderTransaction";
 import { ReminderView, VIEW_TYPE_REMINDER } from "./view";
@@ -40,6 +45,10 @@ import {
   getRibbonIconIndex,
   restoreRibbonIconIndex,
 } from "./lib/ribbon-order";
+import {
+  buildStarterBoardMarkdown,
+  STARTER_BOARD_HEADINGS,
+} from "./lib/starterBoard";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
@@ -89,6 +98,7 @@ export default class QuickReminderPlugin extends Plugin {
           this.taskScanner,
           (fn) => this.registerSelfModifySubscriber(fn),
           (file, transform) => this.applyManagedBlockTransform(file, transform),
+          () => this.createOrOpenStarterBoard(),
         ),
     );
 
@@ -152,6 +162,14 @@ export default class QuickReminderPlugin extends Plugin {
       name: "Open task dashboard",
       callback: () => {
         void this.openTaskDashboard();
+      },
+    });
+
+    this.addCommand({
+      id: "start-with-template-dashboard",
+      name: "Start with template dashboard",
+      callback: () => {
+        void this.createOrOpenStarterBoard();
       },
     });
 
@@ -356,6 +374,76 @@ export default class QuickReminderPlugin extends Plugin {
   onunload(): void {
     this.isUnloaded = true;
     this.scheduler?.cancelAll();
+  }
+
+  async createOrOpenStarterBoard(): Promise<void> {
+    const path = normalizePath(
+      this.store.settings.starterBoardFilePath || DEFAULT_STARTER_BOARD_FILE_PATH,
+    );
+    if (!path.endsWith(".md")) {
+      new Notice("Quick Reminder starter board path must end in .md");
+      return;
+    }
+
+    try {
+      await this.ensureParentFolders(path);
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      let file: TFile;
+
+      if (existing instanceof TFile) {
+        file = existing;
+      } else {
+        if (existing) {
+          new Notice(
+            "Quick Reminder starter board path is already used by a folder.",
+          );
+          return;
+        }
+        file = await this.app.vault.create(
+          path,
+          buildStarterBoardMarkdown(new Date()),
+        );
+      }
+
+      await this.store.updateSettings({
+        starterBoardFilePath: path,
+        taskSectionHeadings: STARTER_BOARD_HEADINGS,
+        taskDashboardState: {
+          ...this.store.settings.taskDashboardState,
+          scope: "active",
+          selectedFolderPath: file.parent?.path || null,
+          lastMarkdownPath: file.path,
+          lastFolderPath: file.parent?.path ?? null,
+        },
+      });
+
+      await this.openFileInMainPane(file);
+      await this.openTaskDashboard();
+      new Notice("Quick Reminder starter dashboard ready.");
+    } catch (error) {
+      console.error("Quick Reminder starter dashboard failed", error);
+      new Notice("Quick Reminder could not create the starter dashboard.");
+    }
+  }
+
+  private async openFileInMainPane(file: TFile): Promise<void> {
+    const leaf =
+      getPreferredMainLeaf(this.app.workspace) ??
+      this.app.workspace.getLeaf("split", "vertical");
+    await leaf.openFile(file, { active: true });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  private async ensureParentFolders(path: string): Promise<void> {
+    const folders = normalizePath(path).split("/").slice(0, -1).filter(Boolean);
+    let current = "";
+    for (const folder of folders) {
+      current = current ? `${current}/${folder}` : folder;
+      const existing = this.app.vault.getAbstractFileByPath(current);
+      if (existing instanceof TFolder) continue;
+      if (existing) throw new Error(`${current} exists and is not a folder`);
+      await this.app.vault.createFolder(current);
+    }
   }
 
   private restoreRibbonPosition(ribbonIcon: HTMLElement): void {
@@ -1382,6 +1470,42 @@ class QuickReminderSettingTab extends PluginSettingTab {
             this.plugin.store.settings.taskSectionHeadings,
           );
         }),
+      );
+
+    containerEl.createEl("h3", { text: "Starter dashboard" });
+
+    new Setting(containerEl)
+      .setName("Starter board path")
+      .setDesc(
+        "Vault-relative file created by Start with template. Existing files are opened, not overwritten.",
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder(DEFAULT_STARTER_BOARD_FILE_PATH)
+          .setValue(
+            this.plugin.store.settings.starterBoardFilePath ||
+              DEFAULT_STARTER_BOARD_FILE_PATH,
+          )
+          .onChange(async (v) => {
+            await this.plugin.store.updateSettings({
+              starterBoardFilePath:
+                normalizePath(v.trim()) || DEFAULT_STARTER_BOARD_FILE_PATH,
+            });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Start with template")
+      .setDesc(
+        "Creates or opens a fully managed starter task board and configures the dashboard around it.",
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Create/open starter board")
+          .setCta()
+          .onClick(() => {
+            void this.plugin.createOrOpenStarterBoard();
+          }),
       );
 
   }

@@ -57,6 +57,12 @@ If installed manually, replace `main.js`, `manifest.json`, and `styles.css` in t
 
 ## Usage
 
+### New install: start with a template dashboard
+
+Run **Quick Reminder: Start with template dashboard** or open **Settings -> Quick Reminder -> Starter dashboard -> Create/open starter board**. Quick Reminder creates a replaceable `Quick Reminder Dashboard.md` board with configured headings, sample tasks, and a managed mirror block. Existing starter-board files are opened, not overwritten.
+
+For full docs, see the in-repo wiki pages in [`docs/wiki/Home.md`](docs/wiki/Home.md).
+
 | Action | Command |
 |---|---|
 | Open reminder manager sidebar | Click the ribbon checklist icon, or command palette -> "Open reminder manager" |
@@ -66,6 +72,7 @@ If installed manually, replace `main.js`, `manifest.json`, and `styles.css` in t
 | View/snooze/edit/done reminders | Reminder manager |
 | Scan vault tasks | Reminder manager -> Scan |
 | Insert task sections | Command palette -> "Insert task sections" |
+| Create/open starter board | Command palette -> "Start with template dashboard" |
 | Change snooze default, mirror file, etc. | Settings -> Quick Reminder |
 
 ## How to use Quick Reminder
