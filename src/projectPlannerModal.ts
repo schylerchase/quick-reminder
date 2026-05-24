@@ -155,6 +155,7 @@ export class ProjectPlannerModal extends Modal {
       type: "text",
       cls: "qr-input qr-project-phase-input",
       value: phase.name,
+      attr: { "aria-label": "Phase name" },
     });
     input.addEventListener("input", () => {
       phase.name = input.value;
@@ -176,6 +177,7 @@ export class ProjectPlannerModal extends Modal {
       type: "text",
       cls: "qr-input qr-project-task-input",
       value: task.text,
+      attr: { "aria-label": "Task text" },
     });
     const chip = line.createSpan({ cls: "qr-project-date-chip" });
     const updateChip = () => {
@@ -193,6 +195,7 @@ export class ProjectPlannerModal extends Modal {
     const notes = row.createEl("textarea", {
       cls: "qr-input qr-input-textarea qr-project-notes-input",
       placeholder: "Notes or subtasks",
+      attr: { "aria-label": "Notes or subtasks" },
     });
     notes.rows = Math.max(2, task.notes.length);
     notes.value = task.notes.join("\n");

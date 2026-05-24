@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder Project Planner QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --interactive-accent-hover: #3d72d9;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        --font-ui-small: 13px;
+        --font-ui-smaller: 11px;
+        --font-monospace: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+        box-sizing: border-box;
+        padding: 14px;
+        background: linear-gradient(180deg, #0f1218 0, #10141c 100%);
+      }
+
+      .qa-modal-shell {
+        width: min(100%, 920px);
+        margin: 0 auto;
+        padding: 18px;
+        border-radius: 18px;
+        background: var(--background-primary);
+        box-shadow: 0 18px 60px rgb(0 0 0 / 0.48);
+        box-sizing: border-box;
+      }
+
+      @media (max-width: 480px) {
+        body {
+          padding: 10px;
+        }
+
+        .qa-modal-shell {
+          padding: 14px;
+          border-radius: 18px 18px 0 0;
+        }
+      }
+    </style>
+  </head>
+  <body class="theme-dark is-mobile is-phone">
+    <main class="qa-modal-shell" data-qa="fixture-root">
+      <div class="qr-modal qr-project-planner-modal" data-qa="project-planner">
+        <h2>Project planner</h2>
+
+        <div class="qr-project-meta">
+          <div class="qr-field">
+            <label class="qr-field-label" for="qa-project-name">Project name</label>
+            <input id="qa-project-name" class="qr-input" value="Client onboarding security evidence and readiness review">
+          </div>
+          <div class="qr-field">
+            <label class="qr-field-label" for="qa-target-note">Target note</label>
+            <input id="qa-target-note" class="qr-input" value="Projects/Client onboarding security evidence and readiness review.md">
+          </div>
+        </div>
+
+        <div class="qr-project-grid">
+          <div class="qr-field qr-project-outline-field">
+            <label class="qr-field-label" for="qa-bulk-outline">Bulk outline</label>
+            <textarea id="qa-bulk-outline" class="qr-input qr-input-textarea qr-project-outline-input">Project: Client onboarding security evidence and readiness review
+File: Projects/Client onboarding security evidence and readiness review.md
+
+## Intake
+- Collect access by Friday 3pm
+  - confirm VPN
+  - confirm billing contact
+- Review current docs due 2026-05-25
+
+## Build
+- Create runbook tomorrow 10am
+- Validate monitoring and escalation paths</textarea>
+          </div>
+
+          <div class="qr-field qr-project-preview-field">
+            <label class="qr-field-label">Editable preview</label>
+            <div class="qr-project-preview" data-qa="project-preview">
+              <section class="qr-project-phase">
+                <div class="qr-project-phase-head">
+                  <span class="qr-project-phase-icon" aria-hidden="true">□</span>
+                  <input class="qr-input qr-project-phase-input" value="Intake" aria-label="Phase name">
+                </div>
+                <div class="qr-project-tasks">
+                  <div class="qr-project-task">
+                    <div class="qr-project-task-line">
+                      <span class="qr-project-task-checkbox" aria-hidden="true">□</span>
+                      <input class="qr-input qr-project-task-input" value="Collect access by Friday 3pm" aria-label="Task text">
+                      <span class="qr-project-date-chip">Date: Friday 3pm</span>
+                    </div>
+                    <textarea class="qr-input qr-input-textarea qr-project-notes-input" aria-label="Notes or subtasks">confirm VPN
+confirm billing contact</textarea>
+                  </div>
+                  <div class="qr-project-task">
+                    <div class="qr-project-task-line">
+                      <span class="qr-project-task-checkbox" aria-hidden="true">□</span>
+                      <input class="qr-input qr-project-task-input" value="Review current docs due 2026-05-25" aria-label="Task text">
+                      <span class="qr-project-date-chip">Date: 2026-05-25</span>
+                    </div>
+                    <textarea class="qr-input qr-input-textarea qr-project-notes-input" aria-label="Notes or subtasks"></textarea>
+                  </div>
+                </div>
+              </section>
+
+              <section class="qr-project-phase">
+                <div class="qr-project-phase-head">
+                  <span class="qr-project-phase-icon" aria-hidden="true">□</span>
+                  <input class="qr-input qr-project-phase-input" value="Build" aria-label="Phase name">
+                </div>
+                <div class="qr-project-tasks">
+                  <div class="qr-project-task">
+                    <div class="qr-project-task-line">
+                      <span class="qr-project-task-checkbox" aria-hidden="true">□</span>
+                      <input class="qr-input qr-project-task-input" value="Validate monitoring and escalation paths with extremely long client-specific wording" aria-label="Task text">
+                      <span class="qr-project-date-chip">Date: tomorrow 10am</span>
+                    </div>
+                    <textarea class="qr-input qr-input-textarea qr-project-notes-input" aria-label="Notes or subtasks">capture exception owners
+confirm monitoring handoff</textarea>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div class="qr-project-validation">
+          <div class="qr-preview-status is-ready">Ready to create Projects/Client onboarding security evidence and readiness review.md</div>
+        </div>
+
+        <div class="qr-modal-actions qr-project-actions" data-qa="project-actions">
+          <button class="qr-secondary-btn" type="button">Cancel</button>
+          <button class="qr-secondary-btn" type="button">Copy Markdown</button>
+          <button class="qr-primary-btn" type="button">Create project note</button>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -30,6 +30,7 @@ The starter board includes sample headings, sample tasks, and a managed mirror b
 | Capture a reminder | Quick Reminder: Quick capture reminder |
 | Open sidebar manager | Quick Reminder: Open reminder manager |
 | Open full dashboard | Quick Reminder: Open task dashboard |
+| Plan a project | Manager -> New -> Project Planner |
 | Start from a template | Quick Reminder: Start with template dashboard |
 | Insert task headings | Quick Reminder: Insert task sections |
 
@@ -42,3 +43,9 @@ send the status update tomorrow 9am
 ```
 
 Quick Reminder parses the date phrase, stores the reminder locally, and schedules it while Obsidian is open.
+
+## First project plan
+
+Open **Quick Reminder: Open reminder manager**, click **New**, then choose **Project Planner**.
+
+Paste an outline with `Project:`, `File:`, headings, tasks, and indented notes. Quick Reminder creates a normal Markdown note and refreshes the task dashboard. It does not schedule reminders automatically; dated tasks can still use **Add reminder** from the dashboard.

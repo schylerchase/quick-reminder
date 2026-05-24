@@ -4,15 +4,17 @@
 
 Approved direction: hybrid bulk outline plus editable preview.
 
+Implementation status: first slice is built in Quick Reminder. The planner opens from `New`, writes a new Markdown note, opens the note, refreshes the dashboard, and blocks existing target notes.
+
 This feature adds a Project Planner module to Quick Reminder so a user can create a whole project note in one pass instead of creating categories and tasks one click at a time.
 
 ## Goal
 
-The Project Planner should turn a rough project outline into normal Obsidian markdown tasks that Quick Reminder already scans. It should not create a separate task database, hidden task store, or cloud dependency.
+The Project Planner turns a rough project outline into normal Obsidian Markdown tasks that Quick Reminder already scans. It does not create a separate task database, hidden task store, or cloud dependency.
 
 ## Entry Point
 
-Add a `Project Planner` choice to the existing `New` flow in the Quick Reminder task manager.
+The existing `New` flow in the Quick Reminder task manager includes a `Project Planner` choice.
 
 The planner opens a modal with:
 
@@ -24,7 +26,7 @@ The planner opens a modal with:
 - `Copy markdown`
 - `Create project note`
 
-The preview should be editable in the first implementation. Phase names and task text use compact text inputs, and task notes or subtasks use small textareas. Dates remain part of task text, with detected date chips shown beside the task so the user can see what Quick Reminder will recognize.
+The preview is editable in the first implementation. Phase names and task text use compact text inputs, and task notes or subtasks use small textareas. Dates remain part of task text, with detected date chips shown beside the task so the user can see what Quick Reminder will recognize.
 
 ## Input Format
 
@@ -56,20 +58,22 @@ Supported fields:
 
 ## Output Format
 
-The planner writes a normal markdown note:
+The planner writes a normal markdown note. The example uses `[todo]`
+markers so this spec does not appear in editor task indexes; generated project
+notes should render those entries as unchecked markdown tasks.
 
-```markdown
+```text
 # Client onboarding
 
 ## Intake
-- [ ] Collect access by Friday 3pm
+- [todo] Collect access by Friday 3pm
   - confirm VPN
   - confirm billing contact
-- [ ] Review current docs due 2026-05-25
+- [todo] Review current docs due 2026-05-25
 
 ## Build
-- [ ] Create runbook tomorrow 10am
-- [ ] Validate monitoring
+- [todo] Create runbook tomorrow 10am
+- [todo] Validate monitoring
 
 <!-- qr:tasks:start -->
 <!-- qr:tasks:end -->
@@ -95,7 +99,7 @@ Add a small parser/writer layer, separate from the modal:
 - `ProjectPlannerModal`
   - owns UI state
   - updates parsed preview as the outline changes
-  - calls the writer only after explicit save
+  - calls the writer only after explicit copy or save
 - `ReminderView`
   - adds the planner entry point to the `New` flow
   - refreshes scanned tasks after project creation
@@ -123,7 +127,7 @@ interface ProjectTask {
 }
 ```
 
-The first slice only needs `todo` output, but the model leaves room for `/` and `x` status support if the parser recognizes those later.
+The first slice renders `todo`, `/`, and `x` statuses when the outline contains checkbox syntax.
 
 ## Error Handling
 
@@ -141,7 +145,7 @@ Unit tests should cover:
 - phases and task grouping
 - indented subtasks as notes
 - rendering to markdown checkboxes
-- target path normalization
+- target path normalization and vault-relative validation
 - empty input validation
 
 Manual verification should cover:
@@ -152,3 +156,4 @@ Manual verification should cover:
 - scan dashboard and confirm tasks appear under phases
 - confirm dated tasks can use the existing `Add reminder` flow
 - confirm no reminders are scheduled during bulk creation
+- verify the modal on narrow mobile width so the action buttons remain reachable

@@ -32,3 +32,7 @@ Add a future date phrase to the task, such as:
 ```md
 - [ ] send status report tomorrow 9am
 ```
+
+## Project Planner will not create a note
+
+Check that the target path is vault-relative, ends in `.md`, and does not already exist. Project Planner creates parent folders when needed, but it will not overwrite or append to an existing note.

@@ -7,6 +7,7 @@ Quick Reminder is an Obsidian plugin for natural-language reminders, local notif
 - [Getting started](Getting-started.md)
 - [Starter dashboard](Starter-dashboard.md)
 - [Task dashboard](Task-dashboard.md)
+- [Project Planner](Project-planner.md)
 - [Managed task boards](Managed-task-boards.md)
 - [Reminders](Reminders.md)
 - [Settings](Settings.md)
@@ -15,11 +16,12 @@ Quick Reminder is an Obsidian plugin for natural-language reminders, local notif
 
 ## Core ideas
 
-Quick Reminder has three surfaces:
+Quick Reminder has four surfaces:
 
 1. **Capture**: type natural language such as `call Alex tomorrow 3pm`.
 2. **Reminder manager**: snooze, complete, edit, restore, or delete scheduled reminders.
 3. **Task dashboard**: scan Markdown notes for tasks and work them from a sidebar or full dashboard tab.
+4. **Project Planner**: turn a rough outline into a normal Markdown project note.
 
 It does not replace your Markdown files with a separate task database. Your notes stay the source of truth.
 

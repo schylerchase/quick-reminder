@@ -24,6 +24,14 @@ Yes. Use **Ignore**. The task remains in the source note.
 
 Yes. The starter dashboard is meant to be edited, renamed, or deleted. It is a starting board, not a permanent cage.
 
+## Does Project Planner schedule reminders?
+
+No. Project Planner creates a normal note and refreshes the dashboard. Use **Add reminder** on dated tasks when you want notifications.
+
+## Can Project Planner append to an existing note?
+
+No. The current planner creates a new note only. If the target path already exists, choose a different path.
+
 ## Where are reminders stored?
 
 Reminder state is stored in plugin data. The optional Markdown mirror is generated output.

@@ -1505,8 +1505,14 @@
   .qr-project-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+  .qr-project-outline-input {
+    min-height: 9em;
+    max-height: 24vh;
+  }
   .qr-project-preview {
-    max-height: 34vh;
+    min-height: 8em;
+    max-height: 18vh;
+    overflow-y: auto;
   }
   .qr-project-task-line {
     grid-template-columns: 22px minmax(0, 1fr);
@@ -1518,6 +1524,19 @@
   }
   .qr-project-notes-input {
     margin-left: 0;
+  }
+  .qr-project-validation .qr-preview-status {
+    display: flex;
+    align-items: flex-start;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+  .qr-project-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .qr-project-actions button {
+    padding-inline: 0.45em;
+    font-size: 0.88em;
   }
   .qr-task-edit-modal {
     gap: 0.55em;

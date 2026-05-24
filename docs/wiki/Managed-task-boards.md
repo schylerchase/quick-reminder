@@ -38,3 +38,7 @@ Settings can auto-insert managed blocks for notes in selected folders. This is o
 ## Safe editing rule
 
 Edit tasks above the block. Treat the block itself as generated output unless you are deliberately replacing the board design.
+
+## Project Planner
+
+Project Planner creates project notes with the managed block already present. Tasks above the block remain the source of truth; the block is still generated output.

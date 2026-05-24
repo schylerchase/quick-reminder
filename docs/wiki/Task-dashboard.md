@@ -30,6 +30,7 @@ It also understands status metadata such as:
 
 ## Main actions
 
+- **New** creates a task, reminder task, or Project Planner note.
 - **Show** jumps to the source note and line.
 - **In progress** marks a checkbox task as `[/]` and adds an in-progress timestamp.
 - **To do** returns a task to `[ ]` and removes status timestamps.
@@ -40,3 +41,7 @@ It also understands status metadata such as:
 ## Sidebar vs dashboard tab
 
 Use the sidebar when working next to a note. Use the main dashboard tab when you want more room for filtering and review.
+
+## Project Planner handoff
+
+Project Planner creates normal Markdown task lines, opens the new note, and refreshes the dashboard. Dated tasks then use the same **Add reminder** action as manually written tasks.

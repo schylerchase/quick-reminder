@@ -1,6 +1,6 @@
 # Quick Reminder
 
-Natural-language reminders for Obsidian, with desktop notifications where available and in-app notices on mobile. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
+Natural-language reminders for Obsidian, with desktop notifications where available and in-app notices on mobile. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard and project planner for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
 
 This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, local reminder notices, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder will optionally call its task editor when you create a task reminder from the editor.
 
@@ -13,6 +13,7 @@ This plugin is not a replacement for the Tasks plugin. It focuses on natural-lan
 - **Launch-time catch-up** - fires any reminders that went overdue while Obsidian was closed.
 - **Reminder manager** - done, snooze, edit, restore, re-add, and delete from one sidebar.
 - **Vault task dashboard** - scans notes for unchecked Markdown tasks plus `TODO:`, `FIXME:`, and `TASK:` markers.
+- **Project Planner** - turns a pasted outline into a normal Markdown project note that the task dashboard can scan.
 
 ## Install
 
@@ -69,6 +70,7 @@ For full docs, see the in-repo wiki pages in [`docs/wiki/Home.md`](docs/wiki/Hom
 | Open task dashboard | Command palette -> "Open task dashboard", or click **Dashboard** in the sidebar manager |
 | Open capture modal | Command palette -> "Quick capture reminder" |
 | Create task or task-backed reminder | Manager -> New |
+| Create project note from outline | Manager -> New -> Project Planner |
 | View/snooze/edit/done reminders | Reminder manager |
 | Scan vault tasks | Reminder manager -> Scan |
 | Insert task sections | Command palette -> "Insert task sections" |
@@ -85,7 +87,7 @@ Screenshot annotations:
 
 1. **Scan** refreshes the task list from your vault. Use it after large edits or if a task does not appear.
 2. **Dashboard** opens the same task manager as a main workspace tab when you want more room.
-3. **New** creates either a plain Markdown task or a task-backed reminder.
+3. **New** creates a plain task, a task-backed reminder, or a Project Planner note.
 4. **Summary counters** show overdue reminders, upcoming reminders, visible tasks, and ignored tasks.
 5. **Filters** narrow the list by text, scope, source type, and sort order.
 6. **Vault Tasks** groups tasks by note, then by heading/status so you can work from the sidebar without moving lines around in the note.
@@ -112,6 +114,15 @@ Use this for fast, standalone reminders that do not need to live beside a source
 5. Use **Show** when you want to jump back to the exact note line.
 
 Quick Reminder updates the original Markdown task line. It does not create a separate task database.
+
+### Common workflow: create a project note from an outline
+
+1. Open the manager and click **New**.
+2. Choose **Project Planner**.
+3. Paste a rough outline with `Project:`, `File:`, headings, tasks, and indented notes.
+4. Review the editable preview, then click **Create project note**.
+
+Quick Reminder creates a normal vault note, opens it, refreshes the dashboard, and leaves dated task reminders for the existing **Add reminder** flow. It does not bulk-schedule reminders automatically.
 
 ### Common workflow: turn a task into a reminder
 
@@ -144,9 +155,10 @@ In the sidebar, this becomes separate **Today** and **Later** groups. Use this w
 
 ### Use guide
 
-Quick Reminder has two related surfaces:
+Quick Reminder has two related surfaces and one planning helper:
 
 - **Reminder manager** - manages scheduled reminders with due dates and local reminder notices.
+- **Project Planner** - creates a new project note from a rough outline.
 - **Task dashboard** - scans markdown notes for task lines and lets you update them in place.
 
 Open the sidebar manager when you want a companion panel beside your note. Open **Dashboard** when you want the task manager as a main-screen tab.
@@ -180,7 +192,7 @@ TASK: marker item
 
 In the task dashboard:
 
-- **New** lets you create a plain markdown task or a reminder task. Reminder tasks are first added to the current/last active source note, then the reminder is linked to that task.
+- **New** lets you create a plain task, a reminder task, or a Project Planner note. Reminder tasks are first added to the current/last active source note, then the reminder is linked to that task.
 - **Show** jumps to the source note and line.
 - **In progress** changes `- [ ]` to `- [/]` and adds `[inProgress:: YYYY-MM-DD HH:mm]`.
 - **To do** changes `- [/]` or `- [x]` back to `- [ ]` and removes status timestamps.
@@ -338,6 +350,8 @@ src/
   taskScanner.ts # Vault Markdown task/TODO scanner
   types.ts       # Shared types + defaults
   view.ts        # Reminder manager + task dashboard sidebar view
+  projectPlannerModal.ts # Project Planner modal UI
+  lib/projectPlanner.ts  # Project Planner parse/render/validation helpers
 ```
 
 ## Release process
