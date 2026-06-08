@@ -42,6 +42,7 @@ test("scanOverdue shows an Obsidian notice when notification permission is denie
 
     assert.equal(fired.length, 1);
     assert.equal(Notice.entries.length, 1);
+    assert.match(Notice.entries[0].message, /reminder due/i);
     assert.match(Notice.entries[0].message, /pay bill/);
   } finally {
     if (previousNotification === undefined) {
@@ -114,6 +115,7 @@ test("scanOverdue batches markNotified for the multi-reminder cascade", async ()
 
   assert.equal(markCalls, 1, "exactly one persist for the entire cascade");
   assert.deepEqual([...(markedIds ?? [])], ids);
+  assert.equal(Notice.entries[0]?.message, "3 missed reminders. Showing them now.");
 });
 
 function createReminder(patch: Partial<Reminder> = {}): Reminder {

@@ -28,7 +28,7 @@ File: Projects/Client onboarding.md
 Supported lines:
 
 - `Project:` sets the note title.
-- `File:` sets the vault-relative target note path.
+- `File:` sets the vault-relative target note path. A folder-style value such as `Projects/` creates `Projects/<project name>.md`.
 - `## Heading` creates a phase.
 - `- task text` creates a task.
 - Indented bullets become notes or subtasks under the previous task.
@@ -41,4 +41,6 @@ Use the editable preview to adjust phase names, task text, and notes before crea
 
 Project Planner writes a normal Markdown note with unchecked tasks and a managed task block. The dashboard scans the new note after saving.
 
-It does not schedule reminders automatically, and it does not append into existing notes. If the target note already exists, choose a different file path.
+It opens the created note, refreshes the dashboard, and leaves dated tasks for the normal **Add reminder** flow.
+
+It does not schedule reminders automatically, and it does not append into existing notes. If the target note already exists, Quick Reminder refuses to overwrite it; choose a different file path.

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder Manager QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --interactive-accent-hover: #3d72d9;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        box-sizing: border-box;
+        min-height: 100vh;
+        padding: 10px;
+      }
+
+      .qa-modal-shell {
+        width: min(100%, 430px);
+        margin: 0 auto;
+        padding: 14px;
+        border-radius: 18px 18px 0 0;
+        background: var(--background-primary);
+        box-shadow: 0 18px 60px rgb(0 0 0 / 0.48);
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body class="theme-dark is-mobile is-phone">
+    <main class="qa-modal-shell" data-qa="fixture-root">
+      <div class="qr-modal qr-list-modal" data-qa="reminder-manager">
+        <div class="qr-modal-header">
+          <h2>Reminders</h2>
+        </div>
+
+        <section class="qr-list-section" aria-labelledby="pending-reminders">
+          <div class="qr-list-section-head">
+            <h3 id="pending-reminders">Pending reminders</h3>
+            <span class="qr-list-count">1</span>
+          </div>
+
+          <div class="qr-list-row">
+            <div class="qr-list-text">
+              <div class="qr-list-title">Call the client about certificate renewal</div>
+              <div class="qr-list-when">Mon, Jun 8, 3:00 PM</div>
+            </div>
+            <div class="qr-list-actions qr-view-row-actions">
+              <button class="qr-row-btn" type="button" aria-label="Done reminder">Done</button>
+              <button class="qr-row-btn" type="button" aria-label="Snooze 15m reminder">Snooze 15m</button>
+              <button class="qr-row-btn" type="button" aria-label="Edit reminder">Edit</button>
+              <button class="qr-row-btn qr-view-del" type="button" aria-label="Delete reminder">Delete</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="qr-list-section" aria-labelledby="history-reminders">
+          <div class="qr-list-section-head">
+            <h3 id="history-reminders">Completed and notified</h3>
+            <span class="qr-list-count">1</span>
+          </div>
+
+          <div class="qr-list-row qr-list-row-history">
+            <div class="qr-list-text">
+              <div class="qr-list-title">Send final weekly notes</div>
+              <div class="qr-list-when">Finished Sun, Jun 7, 9:30 AM - due Sun, Jun 7, 9:00 AM</div>
+            </div>
+            <div class="qr-list-actions qr-view-row-actions">
+              <button class="qr-row-btn" type="button" aria-label="Restore reminder">Restore</button>
+              <button class="qr-row-btn" type="button" aria-label="Re-add reminder">Re-add</button>
+              <button class="qr-row-btn qr-view-del" type="button" aria-label="Delete reminder">Delete</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

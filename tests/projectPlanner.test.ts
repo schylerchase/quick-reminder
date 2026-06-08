@@ -82,6 +82,14 @@ test("normalizes target paths and derives a note path from the project title", (
     normalizeProjectFilePath("Projects/Already.md", "Fallback"),
     "Projects/Already.md",
   );
+  assert.equal(
+    normalizeProjectFilePath("Projects/", "Client onboarding"),
+    "Projects/Client onboarding.md",
+  );
+  assert.equal(
+    normalizeProjectFilePath("Projects/Client/", "Onboarding"),
+    "Projects/Client/Onboarding.md",
+  );
 });
 
 test("validates title, tasks, and unsafe target paths", () => {

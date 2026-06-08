@@ -5,6 +5,7 @@ import {
   extractCheckboxTaskText,
   TaskScanner,
 } from "../src/taskScanner";
+import type { ScrapedTask } from "../src/types";
 import { TFile } from "obsidian";
 
 class FakeFile extends TFile {
@@ -68,4 +69,79 @@ test("scan ignores checkbox tasks inside a managed tasks block", async () => {
   assert.equal(tasks.length, 1);
   assert.equal(tasks[0].text, "source task");
   assert.equal(tasks[0].line, 4);
+});
+
+test("replaceTaskLine returns the updated task identity after an editor rewrite", async () => {
+  const file = new FakeFile("Projects/Roadmap.md");
+  let content = [
+    "# Roadmap",
+    "",
+    "- [ ] follow up tomorrow 10am",
+    "  - confirm owner",
+  ].join("\n");
+  const app = {
+    vault: {
+      getAbstractFileByPath: (path: string) => (path === file.path ? file : null),
+      process: async (_file: TFile, transform: (text: string) => string) => {
+        content = transform(content);
+      },
+    },
+  };
+  const scanner = new TaskScanner(app as never);
+  const task: ScrapedTask = {
+    id: buildCheckboxTaskId(file.path, "follow up tomorrow 10am"),
+    legacyIds: [],
+    text: "follow up tomorrow 10am",
+    contextNotes: ["confirm owner"],
+    contextNoteLines: ["  - confirm owner"],
+    filePath: file.path,
+    line: 3,
+    kind: "checkbox",
+    status: "todo",
+    completed: false,
+    category: "Uncategorized",
+    project: "Roadmap",
+  };
+
+  const updated = await scanner.replaceTaskLine(task, "- [ ] follow up Friday 2pm");
+
+  assert.equal(updated?.id, buildCheckboxTaskId(file.path, "follow up Friday 2pm"));
+  assert.equal(updated?.text, "follow up Friday 2pm");
+  assert.equal(updated?.line, 3);
+  assert.deepEqual(updated?.contextNotes, ["confirm owner"]);
+  assert.match(content, /follow up Friday 2pm/);
+});
+
+test("replaceTaskLine leaves the note unchanged when the rewrite is not a checkbox task", async () => {
+  const file = new FakeFile("Projects/Roadmap.md");
+  const originalContent = "- [ ] follow up tomorrow 10am";
+  let content = originalContent;
+  const app = {
+    vault: {
+      getAbstractFileByPath: (path: string) => (path === file.path ? file : null),
+      process: async (_file: TFile, transform: (text: string) => string) => {
+        content = transform(content);
+      },
+    },
+  };
+  const scanner = new TaskScanner(app as never);
+  const task: ScrapedTask = {
+    id: buildCheckboxTaskId(file.path, "follow up tomorrow 10am"),
+    legacyIds: [],
+    text: "follow up tomorrow 10am",
+    contextNotes: [],
+    contextNoteLines: [],
+    filePath: file.path,
+    line: 1,
+    kind: "checkbox",
+    status: "todo",
+    completed: false,
+    category: "Uncategorized",
+    project: "Roadmap",
+  };
+
+  const updated = await scanner.replaceTaskLine(task, "follow up Friday 2pm");
+
+  assert.equal(updated, null);
+  assert.equal(content, originalContent);
 });

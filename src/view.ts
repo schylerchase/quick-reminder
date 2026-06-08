@@ -33,7 +33,96 @@ import {
   renameHeadingInContent,
 } from "./lib/managedTasksOps";
 import { getPhaseEditAction } from "./lib/phase-actions";
+import {
+  getDashboardOpenFailedNotice,
+  getDashboardScanSuccessNotice,
+  getDashboardRefreshFailedNotice,
+  getDashboardScanFailedNotice,
+  getDashboardScanRefreshFailedNotice,
+  getScopedEmptyTaskAction,
+  shouldShowFirstRunActions,
+  type ScopedEmptyTaskAction,
+} from "./lib/dashboardState";
+import { runDashboardOpenWorkflow } from "./lib/dashboardOpenWorkflow";
+import { runDashboardScanWorkflow } from "./lib/dashboardScanWorkflow";
+import { getStarterBoardOpenFailedNotice } from "./lib/starterBoardMessages";
+import { runStarterBoardEntryAction } from "./lib/starterBoardWorkflow";
 import { filterTasksByQuery, getTaskSearchText } from "./lib/task-search";
+import { runInlineAddWorkflow } from "./lib/inlineAddWorkflow";
+import {
+  getTaskDeleteFailedNotice,
+  getTaskDeleteRefreshFailedNotice,
+} from "./lib/taskDeleteMessages";
+import { runTaskDeleteWorkflow } from "./lib/taskDeleteWorkflow";
+import {
+  getTaskAddedNotice,
+  getTaskAndNotesUpdatedNotice,
+  getTaskCategoryAddedNotice,
+  getTaskCategoryRenamedNotice,
+  getTaskDeletedNotice,
+  getTaskIgnoreFailedNotice,
+  getTaskIgnoreRefreshFailedNotice,
+  getTaskIgnoredNotice,
+  getTaskInlineAddCategoryFailedNotice,
+  getTaskInlineAddFailedNotice,
+  getTaskAppendFailedNotice,
+  getTaskCreateReminderTimeMissingNotice,
+  getTaskCreateRefreshFailedNotice,
+  getTaskCreateStatusFailedNotice,
+  getTaskCreateStatusRefreshFailedNotice,
+  getTaskCreateTextMissingNotice,
+  getTaskContextRefreshFailedNotice,
+  getTaskHeadingRenameFailedNotice,
+  getTaskHeadingRenameRefreshFailedNotice,
+  getTaskLineEditFailedNotice,
+  getTaskLineReadFailedNotice,
+  getTasksPluginUnavailableNotice,
+  getTaskLineUpdateFailedNotice,
+  getTaskLineUpdateRefreshFailedNotice,
+  getTaskNotesSavedNotice,
+  getTaskNotesUpdateFailedNotice,
+  getTaskSourcePathMissingNotice,
+  getTaskSourceMissingNotice,
+  getTaskSourceOpenFailedNotice,
+  getTaskSourcePaneMissingNotice,
+  getTaskReminderCreateFailedNotice,
+  getTaskStatusChangedNotesFailedNotice,
+  getTaskStatusChangedRefreshFailedNotice,
+  getTaskStatusUpdateFailedNotice,
+  getTaskTargetCreateFailedNotice,
+  getTaskTargetUnavailableNotice,
+  getTaskTextUpdateRefreshFailedNotice,
+  getTaskUpdatedNotice,
+  getTaskUnignoreFailedNotice,
+  getTaskUnignoreRefreshFailedNotice,
+  getTaskUnignoredNotice,
+} from "./lib/taskEditMessages";
+import { runTaskIgnoreWorkflow } from "./lib/taskIgnoreWorkflow";
+import { runTaskSourceOpenWorkflow } from "./lib/taskSourceWorkflow";
+import { runTaskContextNoteWorkflow } from "./lib/taskContextNoteWorkflow";
+import {
+  runTaskStatusUpdateWorkflow,
+  writeTaskStatusChange,
+} from "./lib/taskStatusWrite";
+import { runTaskHeadingRenameWorkflow } from "./lib/taskHeadingRenameWorkflow";
+import { runTaskLineEditWorkflow } from "./lib/taskLineEditWorkflow";
+import { runTaskTextEditWorkflow } from "./lib/taskTextEditWorkflow";
+import { getTaskReminderActionState } from "./lib/taskReminderAction";
+import {
+  runExistingTaskReminderWorkflow,
+  saveTaskBackedReminder,
+} from "./lib/taskReminderWorkflow";
+import { runReminderActionWorkflow } from "./lib/reminderActionWorkflow";
+import {
+  getReminderActionFailedNotice,
+  getReminderActionRefreshFailedNotice,
+  getReminderEditInvalidNotice,
+  getReminderPastTimeNotice,
+  getReminderSaveFailedNotice,
+  getTaskReminderCreatedNotice,
+  getTaskReminderDuplicateNotice,
+  getTaskReminderRefreshFailedNotice,
+} from "./lib/reminderMessages";
 import {
   DEFAULT_CATEGORY_FILE_PATH,
   getCategoryInputInitialPath,
@@ -42,6 +131,24 @@ import {
   ProjectPlan,
   validateProjectPlan,
 } from "./lib/projectPlanner";
+import {
+  getProjectCreateFailedNotice,
+  getProjectCreateRefreshFailedNotice,
+  getProjectCreatedNotice,
+  getProjectTargetExistsNotice,
+} from "./lib/projectPlannerMessages";
+import { runProjectNoteCreateWorkflow } from "./lib/projectPlannerWorkflow";
+import {
+  getModalSubmitButtonPresentation,
+  runSingleModalSubmit,
+  shouldCloseAfterSubmit,
+  type ModalSubmitResult,
+} from "./lib/modalSubmit";
+import {
+  getSingleActionButtonState,
+  runKeyedSingleOpen,
+  runSingleAction,
+} from "./lib/singleAction";
 import {
   openMainViewLeaf,
   openSidebarViewLeaf,
@@ -117,6 +224,8 @@ export class ReminderView extends ItemView {
   private unsubscribeSelfModify: (() => void) | null = null;
   private highlightedTaskId: string | null = null;
   private highlightTimeoutHandle: number | null = null;
+  private openTaskModalKeys = new Set<string>();
+  private openEntryModalKeys = new Set<string>();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -140,7 +249,7 @@ export class ReminderView extends ItemView {
       file: TFile,
       transform: (content: string) => string,
     ) => Promise<void> = async () => {},
-    private openStarterBoard: () => Promise<void> = async () => {},
+    private openStarterBoard: () => Promise<boolean | void> = async () => true,
   ) {
     super(leaf);
   }
@@ -249,6 +358,16 @@ export class ReminderView extends ItemView {
     const filteredScraped = this.getFilteredScrapedTasks(unignoredScraped);
     const activeScraped = this.sortScrapedTasks(filteredScraped.filter((task) => !task.completed));
     const completedScraped = this.sortScrapedTasks(filteredScraped.filter((task) => task.completed));
+    const vaultActiveTaskCount = this.getFilteredScrapedTasks(
+      this.scrapedTasks.filter((task) => !ignoredTaskIds.has(task.id)),
+    ).filter((task) => !task.completed).length;
+    const scopedEmptyTaskAction = getScopedEmptyTaskAction({
+      scope: this.taskScope,
+      scopedActiveTaskCount: activeScraped.length,
+      vaultActiveTaskCount,
+      search: this.taskSearch,
+      sourceFilter: this.sourceFilter,
+    });
     const scopedIgnoredScraped = scraped.filter((task) => ignoredTaskIds.has(task.id));
     const ignoredScraped = this.sortScrapedTasks(this.getFilteredScrapedTasks(scopedIgnoredScraped));
 
@@ -262,22 +381,23 @@ export class ReminderView extends ItemView {
 
     const headerActions = header.createDiv({ cls: "qr-view-header-actions" });
     const scanBtn = headerActions.createEl("button", { text: "Scan", cls: "qr-view-secondary-btn" });
-    scanBtn.onclick = async () => {
-      await this.refreshScrapedTasks();
-      await this.render();
-      new Notice(`Found ${this.scrapedTasks.length} vault tasks`);
-    };
+    this.wireHeaderActionButton(scanBtn, {
+      busyText: "Scanning...",
+      action: () => this.scanDashboardTasks(),
+    });
 
     if (this.isMainWorkspaceView()) {
       const sidebarBtn = headerActions.createEl("button", { text: "Sidebar", cls: "qr-view-secondary-btn" });
-      sidebarBtn.onclick = async () => {
-        await this.openAsSidebar();
-      };
+      this.wireHeaderActionButton(sidebarBtn, {
+        busyText: "Opening...",
+        action: () => this.openAsSidebar(),
+      });
     } else {
       const dashboardBtn = headerActions.createEl("button", { text: "Dashboard", cls: "qr-view-secondary-btn" });
-      dashboardBtn.onclick = async () => {
-        await this.openAsDashboard();
-      };
+      this.wireHeaderActionButton(dashboardBtn, {
+        busyText: "Opening...",
+        action: () => this.openAsDashboard(),
+      });
     }
 
     const addBtn = headerActions.createEl("button", { text: "New", cls: "qr-view-add-btn" });
@@ -285,27 +405,14 @@ export class ReminderView extends ItemView {
       this.openNewItemModal();
     };
 
-    const shouldOfferStarterBoard =
-      pending.length === 0 &&
-      activeScraped.length === 0 &&
-      completedScraped.length === 0 &&
-      ignoredScraped.length === 0 &&
-      this.taskSearch.trim() === "" &&
-      this.sourceFilter === "all";
-    if (shouldOfferStarterBoard) {
-      const starterBtn = headerActions.createEl("button", {
-        text: "Start with template",
-        cls: "qr-view-secondary-btn",
-      });
-      starterBtn.onclick = async () => {
-        try {
-          await this.openStarterBoard();
-        } catch (error) {
-          console.error("Quick Reminder starter board failed", error);
-          new Notice("Quick Reminder could not create the starter board.");
-        }
-      };
-    }
+    const shouldShowFirstRunPanel = shouldShowFirstRunActions({
+      pendingCount: pending.length,
+      activeTaskCount: activeScraped.length,
+      completedTaskCount: completedScraped.length,
+      ignoredTaskCount: ignoredScraped.length,
+      search: this.taskSearch,
+      sourceFilter: this.sourceFilter,
+    });
 
     this.renderStats(
       container as HTMLElement,
@@ -316,19 +423,58 @@ export class ReminderView extends ItemView {
     );
     this.renderTaskToolbar(container as HTMLElement, unignoredScraped, filteredScraped.length);
 
+    if (shouldShowFirstRunPanel) {
+      this.renderFirstRunActions(container as HTMLElement);
+    }
+
     if (overdue.length > 0) {
       this.renderSection(container as HTMLElement, "Overdue", overdue, false);
     }
     this.renderSection(container as HTMLElement, "Upcoming", upcoming, false);
-    this.renderScrapedSection(container as HTMLElement, "Vault tasks", activeScraped, unignoredScraped.filter((task) => !task.completed).length);
+    this.renderScrapedSection(container as HTMLElement, "Vault tasks", activeScraped, unignoredScraped.filter((task) => !task.completed).length, false, {}, scopedEmptyTaskAction);
     this.renderScrapedSection(container as HTMLElement, "Completed vault tasks", completedScraped, unignoredScraped.filter((task) => task.completed).length);
     this.renderScrapedSection(container as HTMLElement, "Ignored", ignoredScraped, scopedIgnoredScraped.length, true, ignoredTaskNotes);
     this.renderSection(container as HTMLElement, "History", done, true);
   }
 
-  private scrapedTasksRefresh: Promise<void> | null = null;
+  private renderFirstRunActions(parent: HTMLElement): void {
+    const panel = parent.createDiv({ cls: "qr-first-run-panel" });
+    panel.createDiv({ text: "Start here", cls: "qr-first-run-title" });
 
-  private async refreshScrapedTasks(): Promise<void> {
+    const actions = panel.createDiv({ cls: "qr-first-run-actions" });
+    const starterBtn = actions.createEl("button", {
+      text: "Start with template",
+      cls: "qr-primary-btn",
+    });
+    starterBtn.onclick = async () => {
+      const result = await runStarterBoardEntryAction({
+        openStarterBoard: this.openStarterBoard,
+        setBusy: (busy) => {
+          starterBtn.disabled = busy;
+        },
+        onError: (error) =>
+          console.error("Quick Reminder starter board failed", error),
+      });
+
+      if (!result.ok && !result.handled) {
+        new Notice(getStarterBoardOpenFailedNotice());
+      }
+    };
+
+    actions.createEl("button", { text: "New reminder", cls: "qr-secondary-btn" }).onclick = () => {
+      this.openCaptureWithText("");
+    };
+    actions.createEl("button", { text: "New task", cls: "qr-secondary-btn" }).onclick = () => {
+      this.openNewTaskModal(false);
+    };
+    actions.createEl("button", { text: "Project Planner", cls: "qr-secondary-btn" }).onclick = () => {
+      this.openProjectPlannerModal();
+    };
+  }
+
+  private scrapedTasksRefresh: Promise<boolean> | null = null;
+
+  private async refreshScrapedTasks(showFailureNotice = true): Promise<boolean> {
     // Coalesce concurrent callers (vault events, scan button, render bootstrap)
     // onto a single in-flight scan. Without this, two scans race against
     // store.relinkTaskReferences mutating data.reminders in place.
@@ -339,15 +485,74 @@ export class ReminderView extends ItemView {
         this.scrapedTasks = await this.taskScanner.scan([this.store.settings.mirrorFilePath]);
         await this.store.relinkTaskReferences(this.scrapedTasks);
         this.hasScannedTasks = true;
+        return true;
       } catch (error) {
         console.error("Quick Reminder task scan failed", error);
-        new Notice("Quick Reminder could not scan vault tasks.");
+        if (showFailureNotice) new Notice(getDashboardScanFailedNotice());
+        return false;
       } finally {
         this.isScanningTasks = false;
         this.scrapedTasksRefresh = null;
       }
     })();
     return this.scrapedTasksRefresh;
+  }
+
+  private async scanDashboardTasks(): Promise<void> {
+    const result = await runDashboardScanWorkflow({
+      scan: async () => {
+        const scanned = await this.refreshScrapedTasks(false);
+        return scanned ? this.scrapedTasks.length : null;
+      },
+      refresh: () => this.render(),
+      onScanError: (error) =>
+        console.error("Quick Reminder dashboard scan failed", error),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder dashboard scan refresh failed", error),
+    });
+
+    if (!result.ok) {
+      new Notice(
+        result.scanned
+          ? getDashboardScanRefreshFailedNotice(result.taskCount)
+          : getDashboardScanFailedNotice(),
+      );
+      return;
+    }
+
+    new Notice(getDashboardScanSuccessNotice(result.taskCount));
+  }
+
+  private wireHeaderActionButton(
+    button: HTMLButtonElement,
+    options: {
+      busyText: string;
+      action: () => void | Promise<void>;
+    },
+  ): void {
+    const idleText = button.textContent ?? "";
+    let isRunning = false;
+    button.onclick = async () => {
+      await runSingleAction({
+        isRunning: () => isRunning,
+        setRunning: (running) => {
+          isRunning = running;
+          const state = getSingleActionButtonState(
+            running,
+            idleText,
+            options.busyText,
+          );
+          button.disabled = state.disabled;
+          button.setText(state.text);
+          if (state.ariaBusy) {
+            button.setAttr("aria-busy", "true");
+          } else {
+            button.removeAttribute("aria-busy");
+          }
+        },
+        run: options.action,
+      });
+    };
   }
 
   private queueTaskRefreshForFile(file: TAbstractFile): void {
@@ -462,7 +667,7 @@ export class ReminderView extends ItemView {
   }
 
   private renderRow(parent: HTMLElement, r: Reminder, isHistory: boolean): void {
-    const row = parent.createDiv({ cls: "qr-view-row" });
+    const row = parent.createDiv({ cls: "qr-view-row qr-reminder-row" });
     row.toggleClass("qr-view-row-done", isHistory);
 
     if (this.editingId === r.id && !isHistory) {
@@ -470,24 +675,30 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    const body = row.createDiv({ cls: "qr-view-row-body" });
+    const layout = row.createDiv({ cls: "qr-reminder-layout" });
+    const body = layout.createDiv({ cls: "qr-view-row-body" });
     body.createDiv({ text: r.text, cls: "qr-view-row-text" });
 
     const whenLabel = isHistory ? formatHistoryWhen(r) : formatWhen(r.dueAt);
     body.createDiv({ text: whenLabel, cls: "qr-view-row-when" });
 
-    const actions = row.createDiv({ cls: "qr-view-row-actions" });
+    const actions = layout.createDiv({ cls: "qr-view-row-actions" });
     const renderActions = isHistory ? this.renderHistoryReminderActions : this.renderPendingReminderActions;
     renderActions.call(this, actions, r);
     this.renderDeleteReminderAction(actions, r);
   }
 
   private renderPendingReminderActions(actions: HTMLElement, reminder: Reminder): void {
-    actions.createEl("button", { text: "Done", cls: "qr-row-btn qr-done-btn" }).onclick = async () => {
-      this.scheduler.cancel(reminder.id);
-      await this.store.complete(reminder.id);
-      new Notice("Marked done");
-    };
+    const doneBtn = actions.createEl("button", { text: "Done", cls: "qr-row-btn qr-done-btn" });
+    this.wireReminderActionButton(doneBtn, {
+      busyText: "Saving...",
+      description: "mark this reminder done",
+      successMessage: "Marked done",
+      action: async () => {
+        this.scheduler.cancel(reminder.id);
+        await this.store.complete(reminder.id);
+      },
+    });
 
     const snoozeMinutes = this.store.settings.defaultSnoozeMinutes;
     const snoozeBtn = actions.createEl("button", {
@@ -495,11 +706,15 @@ export class ReminderView extends ItemView {
       cls: "qr-row-btn",
     });
     snoozeBtn.setAttr("aria-label", `Snooze ${snoozeMinutes} minutes`);
-    snoozeBtn.onclick = async () => {
-      await this.store.snooze(reminder.id, snoozeMinutes);
-      this.scheduler.scheduleAll();
-      new Notice(`Snoozed ${snoozeMinutes}m`);
-    };
+    this.wireReminderActionButton(snoozeBtn, {
+      busyText: "Snoozing...",
+      description: "snooze this reminder",
+      successMessage: `Snoozed ${snoozeMinutes}m`,
+      action: async () => {
+        await this.store.snooze(reminder.id, snoozeMinutes);
+        this.scheduler.scheduleAll();
+      },
+    });
 
     actions.createEl("button", { text: "Edit", cls: "qr-row-btn" }).onclick = () => {
       this.editingId = reminder.id;
@@ -508,11 +723,16 @@ export class ReminderView extends ItemView {
   }
 
   private renderHistoryReminderActions(actions: HTMLElement, reminder: Reminder): void {
-    actions.createEl("button", { text: "Restore", cls: "qr-row-btn" }).onclick = async () => {
-      await this.store.restore(reminder.id);
-      this.scheduler.scheduleAll();
-      new Notice("Reminder restored");
-    };
+    const restoreBtn = actions.createEl("button", { text: "Restore", cls: "qr-row-btn" });
+    this.wireReminderActionButton(restoreBtn, {
+      busyText: "Restoring...",
+      description: "restore this reminder",
+      successMessage: "Reminder restored",
+      action: async () => {
+        await this.store.restore(reminder.id);
+        this.scheduler.scheduleAll();
+      },
+    });
 
     actions.createEl("button", { text: "Re-add", cls: "qr-row-btn" }).onclick = () => {
       this.openCaptureWithText(reminder.text);
@@ -525,10 +745,15 @@ export class ReminderView extends ItemView {
       cls: "qr-row-btn qr-view-del",
     });
     delBtn.setAttr("aria-label", "Delete");
-    delBtn.onclick = async () => {
-      this.scheduler.cancel(reminder.id);
-      await this.store.remove(reminder.id);
-    };
+    this.wireReminderActionButton(delBtn, {
+      busyText: "Deleting...",
+      description: "delete this reminder",
+      successMessage: "Reminder deleted",
+      action: async () => {
+        this.scheduler.cancel(reminder.id);
+        await this.store.remove(reminder.id);
+      },
+    });
   }
 
   private renderEditRow(parent: HTMLElement, r: Reminder): void {
@@ -546,24 +771,102 @@ export class ReminderView extends ItemView {
       void this.render();
     };
 
-    actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" }).onclick = async () => {
+    const saveBtn = actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" });
+    const idleText = saveBtn.textContent ?? "";
+    let isRunning = false;
+    saveBtn.onclick = async () => {
       const text = textInput.value.trim();
       const dueAt = new Date(dueInput.value).getTime();
       if (!text || Number.isNaN(dueAt)) {
-        new Notice("Add a task and valid time.");
+        new Notice(getReminderEditInvalidNotice());
         return;
       }
       if (dueAt <= Date.now()) {
-        new Notice("Reminder time must be in the future.");
+        new Notice(getReminderPastTimeNotice());
         return;
       }
-      await this.store.updateReminder(r.id, text, dueAt);
-      this.scheduler.scheduleAll();
-      this.editingId = null;
-      new Notice("Reminder updated");
+
+      await this.runReminderAction(
+        "update this reminder",
+        "Reminder updated",
+        async () => {
+          await this.store.updateReminder(r.id, text, dueAt);
+          this.scheduler.scheduleAll();
+          this.editingId = null;
+        },
+        {
+          isRunning: () => isRunning,
+          setRunning: (running) => {
+            isRunning = running;
+            saveBtn.disabled = running;
+            saveBtn.setText(running ? "Saving..." : idleText);
+          },
+        },
+      );
     };
 
     window.setTimeout(() => textInput.focus(), 0);
+  }
+
+  private wireReminderActionButton(
+    button: HTMLButtonElement,
+    options: {
+      busyText: string;
+      description: string;
+      successMessage: string;
+      action: () => Promise<void>;
+    },
+  ): void {
+    const idleText = button.textContent ?? "";
+    let isRunning = false;
+    button.onclick = async () => {
+      await this.runReminderAction(
+        options.description,
+        options.successMessage,
+        options.action,
+        {
+          isRunning: () => isRunning,
+          setRunning: (running) => {
+            isRunning = running;
+            button.disabled = running;
+            button.setText(running ? options.busyText : idleText);
+          },
+        },
+      );
+    };
+  }
+
+  private async runReminderAction(
+    description: string,
+    successMessage: string,
+    action: () => Promise<void>,
+    runningState?: {
+      isRunning: () => boolean;
+      setRunning: (running: boolean) => void;
+    },
+  ): Promise<boolean> {
+    const result = await runReminderActionWorkflow({
+      isRunning: runningState?.isRunning,
+      setRunning: runningState?.setRunning,
+      run: action,
+      onError: (error) =>
+        console.error("Quick Reminder dashboard reminder action failed", error),
+      refresh: () => this.render(),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder dashboard reminder refresh failed", error),
+    });
+    if (!result.ok) {
+      if ("ignored" in result) return false;
+      new Notice(
+        result.actionCompleted
+          ? getReminderActionRefreshFailedNotice()
+          : getReminderActionFailedNotice(description),
+      );
+      return result.actionCompleted;
+    }
+
+    new Notice(successMessage);
+    return true;
   }
 
   private renderTaskToolbar(
@@ -661,6 +964,7 @@ export class ReminderView extends ItemView {
     totalCount: number,
     isIgnored = false,
     ignoredTaskNotes: Readonly<Record<string, string>> = {},
+    emptyTaskAction: ScopedEmptyTaskAction | null = null,
   ): void {
     const section = parent.createDiv({ cls: "qr-view-section" });
     const collapsed = this.isSectionCollapsed(title);
@@ -668,10 +972,7 @@ export class ReminderView extends ItemView {
     if (collapsed) return;
 
     if (tasks.length === 0) {
-      section.createDiv({
-        text: getEmptyScrapedText(title, totalCount),
-        cls: "qr-view-empty",
-      });
+      this.renderEmptyScrapedSection(section, title, totalCount, emptyTaskAction);
       return;
     }
 
@@ -696,6 +997,31 @@ export class ReminderView extends ItemView {
         cls: "qr-view-empty",
       });
     }
+  }
+
+  private renderEmptyScrapedSection(
+    parent: HTMLElement,
+    title: string,
+    totalCount: number,
+    emptyTaskAction: ScopedEmptyTaskAction | null,
+  ): void {
+    if (!emptyTaskAction) {
+      parent.createDiv({
+        text: getEmptyScrapedText(title, totalCount),
+        cls: "qr-view-empty",
+      });
+      return;
+    }
+
+    const empty = parent.createDiv({ cls: "qr-view-empty qr-view-empty-action" });
+    empty.createSpan({ text: emptyTaskAction.text });
+    const actionBtn = empty.createEl("button", {
+      text: emptyTaskAction.label,
+      cls: "qr-row-btn",
+    });
+    actionBtn.onclick = () => {
+      this.setScope(emptyTaskAction.nextScope);
+    };
   }
 
   private renderSectionHead(parent: HTMLElement, title: string, count: string, collapsed: boolean): void {
@@ -984,14 +1310,35 @@ export class ReminderView extends ItemView {
       }
       const file = this.app.vault.getAbstractFileByPath(filePath);
       if (!(file instanceof TFile)) {
-        new Notice(`Quick Reminder: cannot find ${filePath}`);
+        new Notice(getTaskSourcePathMissingNotice(filePath));
         restore(original);
         return;
       }
-      await this.applyManagedBlockTransform(file, (content) =>
-        renameHeadingInContent(content, oldName, next),
-      );
-      void this.render();
+      const result = await runTaskHeadingRenameWorkflow({
+        renameHeading: async () => {
+          await this.applyManagedBlockTransform(file, (content) =>
+            renameHeadingInContent(content, oldName, next),
+          );
+          return true;
+        },
+        afterRename: () => this.render(),
+        onRenameError: (error) =>
+          console.error("Quick Reminder category rename failed", error),
+        onAfterRenameError: (error) =>
+          console.error("Quick Reminder category rename refresh failed", error),
+      });
+
+      if (!result.ok) {
+        new Notice(
+          result.renamed
+            ? getTaskHeadingRenameRefreshFailedNotice()
+            : getTaskHeadingRenameFailedNotice(),
+        );
+        restore(result.renamed ? next : original);
+        return;
+      }
+
+      new Notice(getTaskCategoryRenamedNotice());
     };
 
     input.onblur = () => void commit();
@@ -1035,13 +1382,33 @@ export class ReminderView extends ItemView {
         restore(original);
         return;
       }
-      const updated = await this.taskScanner.setCheckboxText(task, next);
-      if (!updated) {
-        new Notice("Quick Reminder: could not update task text");
-        restore(original);
+      const result = await runTaskTextEditWorkflow({
+        updateTask: () => this.taskScanner.setCheckboxText(task, next),
+        afterUpdate: async (updated) => {
+          await this.store.relinkTask(task.id, updated.id);
+          await this.refreshScrapedTasks();
+          this.flashTask(updated.id);
+          await this.render();
+        },
+        onUpdateError: (error) =>
+          console.error("Quick Reminder task text update failed", error),
+        onAfterUpdateError: (error) =>
+          console.error("Quick Reminder task text refresh failed", error),
+      });
+      if (!result.ok) {
+        new Notice(
+          result.updated
+            ? getTaskTextUpdateRefreshFailedNotice()
+            : getTaskStatusUpdateFailedNotice(),
+        );
+        if (result.updated) {
+          restore(next);
+        } else {
+          restore(original);
+        }
         return;
       }
-      void this.render();
+      new Notice(getTaskUpdatedNotice());
     };
 
     input.onblur = () => void commit();
@@ -1133,21 +1500,40 @@ export class ReminderView extends ItemView {
       button.removeClass("qr-hidden");
     };
 
+    let isSubmitting = false;
+    const setSubmitting = (submitting: boolean) => {
+      isSubmitting = submitting;
+      save.disabled = submitting;
+      save.setText(submitting ? "Adding..." : "Add");
+    };
+
     const submit = async () => {
       const name = categoryInput.value.trim();
       if (name.length === 0) {
         categoryInput.focus();
         return;
       }
-      const file = await this.getManagedTaskTargetFile(targetInput.value);
-      if (!file) return;
-      restore();
-      await this.applyManagedBlockTransform(file, (content) =>
-        appendHeading(content, name),
-      );
+      const saved = await runInlineAddWorkflow({
+        isSubmitting: () => isSubmitting,
+        setSubmitting,
+        getTarget: () => this.getManagedTaskTargetFile(targetInput.value),
+        write: (file) =>
+          this.applyManagedBlockTransform(file, (content) =>
+            appendHeading(content, name),
+          ),
+        restore,
+        onWriteError: (error) => {
+          console.error("Quick Reminder category add failed", error);
+          new Notice(getTaskInlineAddCategoryFailedNotice());
+        },
+      });
+      if (!saved) {
+        categoryInput.focus();
+        return;
+      }
       await this.refreshScrapedTasks();
       await this.render();
-      new Notice(`Category added to ${file.path}`);
+      new Notice(getTaskCategoryAddedNotice());
     };
 
     save.onclick = () => void submit();
@@ -1207,22 +1593,41 @@ export class ReminderView extends ItemView {
       button.removeClass("qr-hidden");
     };
 
+    let isSubmitting = false;
+    const setSubmitting = (submitting: boolean) => {
+      isSubmitting = submitting;
+      save.disabled = submitting;
+      save.setText(submitting ? "Adding..." : "Add");
+    };
+
     const submit = async () => {
       const text = taskInput.value.trim();
       if (text.length === 0) {
         taskInput.focus();
         return;
       }
-      const file = await this.getManagedTaskTargetFile(targetInput.value);
-      if (!file) return;
       const heading = phase.isInbox ? "Inbox" : phase.name;
-      restore();
-      await this.applyManagedBlockTransform(file, (content) =>
-        addTaskUnderHeading(content, heading, text),
-      );
+      const saved = await runInlineAddWorkflow({
+        isSubmitting: () => isSubmitting,
+        setSubmitting,
+        getTarget: () => this.getManagedTaskTargetFile(targetInput.value),
+        write: (file) =>
+          this.applyManagedBlockTransform(file, (content) =>
+            addTaskUnderHeading(content, heading, text),
+          ),
+        restore,
+        onWriteError: (error) => {
+          console.error("Quick Reminder inline task add failed", error);
+          new Notice(getTaskInlineAddFailedNotice());
+        },
+      });
+      if (!saved) {
+        taskInput.focus();
+        return;
+      }
       await this.refreshScrapedTasks();
       await this.render();
-      new Notice(`Task added to ${file.path}`);
+      new Notice(getTaskAddedNotice());
     };
 
     save.onclick = () => void submit();
@@ -1260,7 +1665,7 @@ export class ReminderView extends ItemView {
       return existing;
     }
     if (existing !== null) {
-      new Notice(`Quick Reminder: ${path} is not a markdown file.`);
+      new Notice(getTaskTargetUnavailableNotice(path));
       return null;
     }
 
@@ -1269,7 +1674,7 @@ export class ReminderView extends ItemView {
       return await this.app.vault.create(path, this.getCategoryFileScaffold(path));
     } catch (error) {
       console.error("Quick Reminder category target create failed", error);
-      new Notice(`Quick Reminder: could not create ${path}.`);
+      new Notice(getTaskTargetCreateFailedNotice(path));
       return null;
     }
   }
@@ -1317,6 +1722,7 @@ export class ReminderView extends ItemView {
     row.toggleClass("qr-view-row-highlight", task.id === this.highlightedTaskId);
     row.toggleClass("qr-mobile-task-collapsed", isMobileTaskLayout && !isMobileExpanded);
     row.toggleClass("qr-mobile-task-expanded", isMobileExpanded);
+    const hasPendingReminder = this.hasPendingReminderForTask(task);
     const body = row.createDiv({ cls: "qr-view-row-body" });
     if (isMobileTaskLayout) {
       body.addClass("qr-mobile-task-toggle");
@@ -1340,6 +1746,10 @@ export class ReminderView extends ItemView {
     if (task.contextNotes.length > 0) {
       badges.createSpan({ text: `${task.contextNotes.length} notes`, cls: "qr-task-badge qr-task-context-badge" });
     }
+    const reminderAction = getTaskReminderActionState(hasPendingReminder, false);
+    if (reminderAction.badgeText) {
+      badges.createSpan({ text: reminderAction.badgeText, cls: "qr-task-badge qr-task-reminder-badge" });
+    }
     if (isIgnored) {
       badges.createSpan({ text: "Ignored", cls: "qr-task-badge qr-task-muted-badge" });
     }
@@ -1358,20 +1768,22 @@ export class ReminderView extends ItemView {
     this.wireMobileTaskCardExpansion(row, body, task, mobileCaret);
 
     const actions = row.createDiv({ cls: "qr-view-row-actions" });
-    actions.createEl("button", { text: "Show", cls: "qr-row-btn" }).onclick = async () => {
-      await this.openTaskSource(task);
-    };
+    const showBtn = actions.createEl("button", { text: "Show", cls: "qr-row-btn" });
+    this.wireTaskRowActionButton(showBtn, {
+      busyText: "Opening...",
+      action: () => this.openTaskSource(task),
+    });
     actions.createEl("button", { text: "Note", cls: "qr-row-btn" }).onclick = () => {
       this.openTaskContextNoteEditor(task);
     };
 
     if (isIgnored) {
       this.addScrapedRowContextMenu(row, task, isIgnored);
-      actions.createEl("button", { text: "Unignore", cls: "qr-row-btn" }).onclick = async () => {
-        await this.store.unignoreTask(task.id);
-        await this.render();
-        new Notice("Task unignored");
-      };
+      const unignoreBtn = actions.createEl("button", { text: "Unignore", cls: "qr-row-btn" });
+      this.wireTaskRowActionButton(unignoreBtn, {
+        busyText: "Saving...",
+        action: () => this.unignoreTask(task.id),
+      });
       actions.createEl("button", { text: "Delete", cls: "qr-row-btn qr-view-del" }).onclick = async () => {
         await this.deleteTask(task);
       };
@@ -1382,18 +1794,31 @@ export class ReminderView extends ItemView {
       if (!task.completed) {
         const progressLabel = task.status === "in-progress" ? "To do" : "In progress";
         const progressStatus = task.status === "in-progress" ? "todo" : "in-progress";
-        actions.createEl("button", { text: progressLabel, cls: "qr-row-btn qr-progress-btn" }).onclick = async () => {
-          await this.updateTaskStatus(task, progressStatus, `Task marked ${progressLabel.toLowerCase()}`);
-        };
+        const progressBtn = actions.createEl("button", { text: progressLabel, cls: "qr-row-btn qr-progress-btn" });
+        this.wireTaskRowActionButton(progressBtn, {
+          busyText: "Saving...",
+          action: () =>
+            this.updateTaskStatus(
+              task,
+              progressStatus,
+              `Task marked ${progressLabel.toLowerCase()}`,
+            ),
+        });
       }
 
       const doneBtn = actions.createEl("button", {
         text: task.completed ? "To do" : "Done",
         cls: "qr-row-btn qr-done-btn",
       });
-      doneBtn.onclick = async () => {
-        await this.updateTaskStatus(task, task.completed ? "todo" : "completed", task.completed ? "Task marked to do" : "Task marked done");
-      };
+      this.wireTaskRowActionButton(doneBtn, {
+        busyText: "Saving...",
+        action: () =>
+          this.updateTaskStatus(
+            task,
+            task.completed ? "todo" : "completed",
+            task.completed ? "Task marked to do" : "Task marked done",
+          ),
+      });
 
       // Inline edit — always available. Falls back to Tasks plugin modal
       // when that integration is wired, otherwise swaps the row text to an
@@ -1402,16 +1827,19 @@ export class ReminderView extends ItemView {
         text: "Edit",
         cls: "qr-row-btn",
       });
-      editBtn.onclick = async () => {
-        if (
-          this.store.settings.tasksIntegrationEnabled &&
-          getTasksPluginApi(this.app) !== null
-        ) {
-          await this.editWithTasksPlugin(task);
-        } else {
-          this.startInlineTaskEdit(row, task);
-        }
-      };
+      this.wireTaskRowActionButton(editBtn, {
+        busyText: "Opening...",
+        action: async () => {
+          if (
+            this.store.settings.tasksIntegrationEnabled &&
+            getTasksPluginApi(this.app) !== null
+          ) {
+            await this.editWithTasksPlugin(task);
+          } else {
+            this.startInlineTaskEdit(row, task);
+          }
+        },
+      });
     }
 
     this.addScrapedRowContextMenu(row, task, isIgnored);
@@ -1428,45 +1856,112 @@ export class ReminderView extends ItemView {
       this.openIgnoreTaskModal(task);
     };
 
-    if (this.hasPendingReminderForTask(task)) {
+    if (hasPendingReminder) {
       const addedBtn = actions.createEl("button", {
-        text: "Added",
+        text: reminderAction.buttonText,
         cls: "qr-row-btn",
       });
       addedBtn.disabled = true;
-      addedBtn.setAttr("aria-label", "Reminder already added for this task");
+      addedBtn.setAttr("aria-label", reminderAction.ariaLabel);
+      if (reminderAction.title) {
+        addedBtn.setAttr("title", reminderAction.title);
+      }
       return;
     }
 
     const parsed = parseReminder(task.text);
     const dueAt = parsed.dueAt;
-    if (!hasFutureDueAt(dueAt)) {
+    const addReminderAction = getTaskReminderActionState(false, hasFutureDueAt(dueAt));
+    if (!addReminderAction.canAddReminder || dueAt === null) {
       const noTimeBtn = actions.createEl("button", {
-        text: "No time",
+        text: addReminderAction.buttonText,
         cls: "qr-row-btn qr-no-time-btn",
       });
       noTimeBtn.disabled = true;
-      noTimeBtn.setAttr("aria-label", "Task exists, but no future reminder time was detected");
-      noTimeBtn.setAttr("title", "No completion time set");
+      noTimeBtn.setAttr("aria-label", addReminderAction.ariaLabel);
+      if (addReminderAction.title) {
+        noTimeBtn.setAttr("title", addReminderAction.title);
+      }
       return;
     }
 
     const remindBtn = actions.createEl("button", {
-      text: "Add reminder",
+      text: addReminderAction.buttonText,
       cls: "qr-row-btn",
     });
-    remindBtn.onclick = async () => {
-      const reminder: Reminder = {
-        id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-        text: parsed.text,
-        rawInput: task.text,
-        dueAt,
-        createdAt: Date.now(),
-        notified: false,
-        sourceTaskId: task.id,
-      };
-      await saveScheduledReminder(this.store, this.scheduler, reminder);
-      new Notice(`Reminder added from ${task.filePath}:${task.line}`);
+    remindBtn.setAttr("aria-label", addReminderAction.ariaLabel);
+    this.wireTaskRowActionButton(remindBtn, {
+      busyText: "Adding...",
+      action: async () => {
+        const reminder: Reminder = {
+          id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+          text: parsed.text,
+          rawInput: task.text,
+          dueAt,
+          createdAt: Date.now(),
+          notified: false,
+          sourceTaskId: task.id,
+        };
+        const result = await runExistingTaskReminderWorkflow({
+          hasExistingReminder: () => this.store.hasPendingReminderForSourceTask(task.id),
+          saveReminder: () => saveScheduledReminder(this.store, this.scheduler, reminder),
+          afterSave: () => this.render(),
+          onDuplicate: () => new Notice(getTaskReminderDuplicateNotice()),
+          onSaveError: (error) =>
+            console.error("Quick Reminder task reminder create failed", error),
+          onAfterSaveError: (error) =>
+            console.error("Quick Reminder task reminder refresh failed", error),
+        });
+
+        if (!result.ok) {
+          if ("duplicate" in result) {
+            await this.render();
+            return;
+          }
+
+          if (!result.reminderSaved) {
+            new Notice(getReminderSaveFailedNotice());
+            return;
+          }
+
+          new Notice(getTaskReminderRefreshFailedNotice());
+          return;
+        }
+
+        new Notice(getTaskReminderCreatedNotice(reminder.text));
+      },
+    });
+  }
+
+  private wireTaskRowActionButton(
+    button: HTMLButtonElement,
+    options: {
+      busyText: string;
+      action: () => void | Promise<void>;
+    },
+  ): void {
+    const idleText = button.textContent ?? "";
+    let isRunning = false;
+    button.onclick = async () => {
+      await runSingleAction({
+        isRunning: () => isRunning,
+        setRunning: (running) => {
+          isRunning = running;
+          const state = getSingleActionButtonState(
+            running,
+            idleText,
+            options.busyText,
+          );
+          button.disabled = state.disabled;
+          button.setText(state.text);
+          if (state.ariaBusy) {
+            button.setAttr("aria-busy", "true");
+          } else {
+            button.removeAttribute("aria-busy");
+          }
+        },
+        run: options.action,
+      });
     };
   }
 
@@ -1546,15 +2041,34 @@ export class ReminderView extends ItemView {
   }
 
   private hasPendingReminderForTask(task: ScrapedTask): boolean {
-    return this.store.pending.some((reminder) => reminder.sourceTaskId === task.id);
+    return this.store.hasPendingReminderForSourceTask(task.id);
   }
 
   private openIgnoreTaskModal(task: ScrapedTask): void {
-    new IgnoreTaskModal(this.app, task, async (note) => {
-      await this.store.ignoreTask(task.id, note);
-      await this.render();
-      new Notice("Task ignored");
-    }).open();
+    this.openManagedTaskModal(task, "ignore", (release) => {
+      new IgnoreTaskModal(this.app, task, async (note) => {
+        const result = await runTaskIgnoreWorkflow({
+          setIgnored: () => this.store.ignoreTask(task.id, note),
+          afterSetIgnored: () => this.render(),
+          onSetIgnoredError: (error) =>
+            console.error("Quick Reminder task ignore failed", error),
+          onAfterSetIgnoredError: (error) =>
+            console.error("Quick Reminder task ignore refresh failed", error),
+        });
+
+        if (!result.ok) {
+          new Notice(
+            result.changed
+              ? getTaskIgnoreRefreshFailedNotice()
+              : getTaskIgnoreFailedNotice(),
+          );
+          return result.changed;
+        }
+
+        new Notice(getTaskIgnoredNotice());
+        return true;
+      }, release).open();
+    });
   }
 
   private openTaskContextNoteEditor(task: ScrapedTask): void {
@@ -1566,37 +2080,74 @@ export class ReminderView extends ItemView {
           void this.editWithTasksPlugin(task);
         }
       : null;
-    new TaskContextNoteModal(
-      this.app,
-      task,
-      async (rawNoteBlock, statusChange) => {
-        let currentTask = task;
-        if (statusChange) {
-          const updated = await this.taskScanner.setCheckboxStatus(task, statusChange);
-          if (!updated) {
-            new Notice("Could not update task status. Open the note and edit it manually.");
-            return;
+    this.openManagedTaskModal(task, "notes", (release) => {
+      new TaskContextNoteModal(
+        this.app,
+        task,
+        async (rawNoteBlock, statusChange) => {
+          const result = await runTaskContextNoteWorkflow({
+            task,
+            changeStatus: statusChange
+              ? () => this.taskScanner.setCheckboxStatus(task, statusChange)
+              : undefined,
+            afterStatusChange: (updated) => this.store.relinkTask(task.id, updated.id),
+            saveNotes: (currentTask) =>
+              this.taskScanner.replaceTaskContextNoteLines(currentTask, rawNoteBlock),
+            afterSave: async (currentTask) => {
+              await this.refreshScrapedTasks();
+              this.flashTask(currentTask.id);
+              await this.render();
+            },
+            onStatusError: (error) =>
+              console.error("Quick Reminder task status update failed", error),
+            onAfterStatusError: (error) =>
+              console.error("Quick Reminder task status relink failed", error),
+            onNotesError: (error) =>
+              console.error("Quick Reminder task notes update failed", error),
+            onAfterSaveError: (error) =>
+              console.error("Quick Reminder task context refresh failed", error),
+          });
+
+          if (!result.ok) {
+            const notice =
+              result.stage === "status"
+                ? getTaskStatusUpdateFailedNotice()
+                : result.stage === "afterStatus" || result.statusChanged
+                  ? result.notesChanged
+                    ? getTaskStatusChangedRefreshFailedNotice()
+                    : getTaskStatusChangedNotesFailedNotice()
+                  : result.stage === "afterSave"
+                    ? getTaskContextRefreshFailedNotice()
+                    : getTaskNotesUpdateFailedNotice();
+            new Notice(notice);
+            return result.statusChanged || result.notesChanged;
           }
-          await this.store.relinkTask(task.id, updated.id);
-          currentTask = updated;
-        }
-        const saved = await this.taskScanner.replaceTaskContextNoteLines(currentTask, rawNoteBlock);
-        if (!saved) {
-          new Notice("Could not update notes. Open the source note and update it manually.");
-          return;
-        }
-        await this.refreshScrapedTasks();
-        await this.render();
-        if (statusChange && rawNoteBlock.trim() === "") {
-          new Notice("Task updated");
-        } else if (statusChange) {
-          new Notice("Task and notes updated");
-        } else {
-          new Notice(rawNoteBlock.trim() === "" ? "Task notes cleared" : "Task notes updated");
-        }
-      },
-      escapeHatch,
-    ).open();
+
+          if (result.statusChanged && rawNoteBlock.trim() === "") {
+            new Notice(getTaskUpdatedNotice());
+          } else if (result.statusChanged) {
+            new Notice(getTaskAndNotesUpdatedNotice());
+          } else {
+            new Notice(getTaskNotesSavedNotice(rawNoteBlock.trim() !== ""));
+          }
+          return true;
+        },
+        escapeHatch,
+        release,
+      ).open();
+    });
+  }
+
+  private openManagedTaskModal(
+    task: ScrapedTask,
+    action: "delete" | "ignore" | "notes",
+    open: (release: () => void) => void,
+  ): void {
+    runKeyedSingleOpen({
+      openKeys: this.openTaskModalKeys,
+      key: `${action}:${task.id}`,
+      open,
+    });
   }
 
   private addScrapedRowContextMenu(row: HTMLElement, task: ScrapedTask, isIgnored: boolean): void {
@@ -1650,7 +2201,7 @@ export class ReminderView extends ItemView {
             .setTitle("Unignore task")
             .setIcon("eye")
             .onClick(() => {
-              void this.store.unignoreTask(task.id).then(() => this.render());
+              void this.unignoreTask(task.id);
             });
         });
       } else if (!task.completed) {
@@ -1679,35 +2230,74 @@ export class ReminderView extends ItemView {
   }
 
   private openCaptureWithText(text: string, sourceTaskId: string | null = null): void {
-    new QuickCaptureModal(this.app, this.store, this.scheduler, text, sourceTaskId, null, false).open();
+    this.openSingleEntryModal(`capture:${sourceTaskId ?? "manual"}`, (release) => {
+      new QuickCaptureModal(
+        this.app,
+        this.store,
+        this.scheduler,
+        text,
+        sourceTaskId,
+        null,
+        false,
+        release,
+      ).open();
+    });
   }
 
   private openNewItemModal(): void {
-    new NewItemModal(
-      this.app,
-      () => this.openNewTaskModal(false),
-      () => this.openNewTaskModal(true),
-      () => this.openProjectPlannerModal(),
-    ).open();
+    this.openSingleEntryModal("new-item", (release) => {
+      new NewItemModal(
+        this.app,
+        () => this.openNewTaskModal(false),
+        () => this.openNewTaskModal(true),
+        () => this.openProjectPlannerModal(),
+        release,
+      ).open();
+    });
   }
 
   private openProjectPlannerModal(): void {
-    new ProjectPlannerModal(this.app, (plan, markdown) =>
-      this.createProjectFromPlanner(plan, markdown),
-    ).open();
+    this.openSingleEntryModal("project-planner", (release) => {
+      new ProjectPlannerModal(
+        this.app,
+        (plan, markdown) =>
+          this.createProjectFromPlanner(plan, markdown),
+        release,
+      ).open();
+    });
   }
 
   private openNewTaskModal(withReminder: boolean): void {
     const filePath = this.getTaskCreationFilePath() ?? DEFAULT_CATEGORY_FILE_PATH;
-    new NewTaskModal(this.app, withReminder, filePath, async (request) => {
-      await this.createTaskFromInput(
-        request.targetFilePath,
-        request.rawInput,
+    const key = withReminder ? "new-reminder-task" : "new-task";
+    this.openSingleEntryModal(key, (release) => {
+      new NewTaskModal(
+        this.app,
         withReminder,
-        request.status,
-        request.details,
-      );
-    }).open();
+        filePath,
+        async (request) => {
+          return this.createTaskFromInput(
+            request.targetFilePath,
+            request.rawInput,
+            withReminder,
+            request.status,
+            request.details,
+          );
+        },
+        release,
+      ).open();
+    });
+  }
+
+  private openSingleEntryModal(
+    key: string,
+    open: (release: () => void) => void,
+  ): void {
+    runKeyedSingleOpen({
+      openKeys: this.openEntryModalKeys,
+      key,
+      open,
+    });
   }
 
   private getTaskCreationFilePath(): string | null {
@@ -1727,39 +2317,56 @@ export class ReminderView extends ItemView {
     withReminder: boolean,
     status: "todo" | "in-progress" | "completed" = "todo",
     details = "",
-  ): Promise<void> {
+  ): Promise<boolean> {
     const parsed = parseReminder(rawInput);
     const taskText = withReminder ? parsed.text : rawInput.trim();
     if (!taskText) {
-      new Notice("Task needs text.");
-      return;
+      new Notice(getTaskCreateTextMissingNotice());
+      return false;
     }
     if (withReminder && (!parsed.dueAt || parsed.dueAt <= Date.now())) {
-      new Notice("Reminder needs a future time, like 'tomorrow 3pm'.");
-      return;
+      new Notice(getTaskCreateReminderTimeMissingNotice());
+      return false;
     }
 
     const file = await this.getManagedTaskTargetFile(filePath);
-    if (!file) return;
+    if (!file) return false;
 
     const { taskText: plainTaskText, contextNotes: inlineContextNotes } = splitTaskInput(taskText);
     const detailContextNotes = normalizeContextNoteLines(details.split(/\r?\n/));
     const contextNotes = [...inlineContextNotes, ...detailContextNotes];
     const task = await this.taskScanner.appendTask(file.path, plainTaskText, contextNotes);
     if (!task) {
-      new Notice("Could not add task to the source note.");
-      return;
+      new Notice(getTaskAppendFailedNotice());
+      return false;
     }
 
     let finalTask = task;
+    let statusNotice:
+      | ((createdReminder: boolean) => string)
+      | null = null;
     if (status !== "todo") {
-      const updated = await this.taskScanner.setCheckboxStatus(task, status);
-      if (updated) {
-        await this.store.relinkTask(task.id, updated.id);
-        finalTask = updated;
+      const statusResult = await runTaskStatusUpdateWorkflow({
+        updateStatus: () => this.taskScanner.setCheckboxStatus(task, status),
+        afterUpdate: (updated) => this.store.relinkTask(task.id, updated.id),
+        onUpdateError: (error) =>
+          console.error("Quick Reminder new task status update failed", error),
+        onAfterUpdateError: (error) =>
+          console.error("Quick Reminder new task status relink failed", error),
+      });
+      if (!statusResult.ok) {
+        if (statusResult.updated) {
+          finalTask = statusResult.task;
+          statusNotice = getTaskCreateStatusRefreshFailedNotice;
+        } else {
+          statusNotice = getTaskCreateStatusFailedNotice;
+        }
+      } else {
+        finalTask = statusResult.task;
       }
     }
 
+    let reminderCreated = false;
     if (withReminder && parsed.dueAt) {
       const reminder: Reminder = {
         id: genReminderId(),
@@ -1770,12 +2377,37 @@ export class ReminderView extends ItemView {
         notified: false,
         sourceTaskId: finalTask.id,
       };
-      await saveScheduledReminder(this.store, this.scheduler, reminder);
+      const reminderResult = await saveTaskBackedReminder({
+        saveReminder: () => saveScheduledReminder(this.store, this.scheduler, reminder),
+        deleteTask: () => this.taskScanner.deleteTaskLine(finalTask),
+        onRollbackError: (error) => console.error("Quick Reminder task reminder rollback failed", error),
+      });
+      if (!reminderResult.ok) {
+        await this.refreshScrapedTasks();
+        await this.render();
+        new Notice(getTaskReminderCreateFailedNotice(reminderResult.rolledBackTask));
+        return false;
+      }
+      reminderCreated = true;
     }
 
-    await this.refreshScrapedTasks();
-    await this.render();
-    new Notice(withReminder ? "Task and reminder created" : "Task created");
+    try {
+      await this.refreshScrapedTasks();
+      await this.render();
+    } catch (error) {
+      console.error("Quick Reminder task create refresh failed", error);
+      new Notice(getTaskCreateRefreshFailedNotice(reminderCreated));
+      return true;
+    }
+
+    new Notice(
+      statusNotice
+        ? statusNotice(reminderCreated)
+        : withReminder
+          ? "Task and reminder created"
+          : "Task created",
+    );
+    return true;
   }
 
   private async createProjectFromPlanner(
@@ -1789,25 +2421,39 @@ export class ReminderView extends ItemView {
     }
 
     const path = plan.filePath;
-    const existing = this.app.vault.getAbstractFileByPath(path);
-    if (existing !== null) {
-      new Notice(`Quick Reminder: ${path} already exists.`);
-      return false;
+    const result = await runProjectNoteCreateWorkflow({
+      targetExists: () => this.app.vault.getAbstractFileByPath(path) !== null,
+      createNote: async () => {
+        await this.ensureCategoryParentFolders(path);
+        return this.app.vault.create(path, markdown);
+      },
+      afterCreate: async (file) => {
+        await this.openProjectNote(file);
+        await this.refreshScrapedTasks();
+        await this.render();
+      },
+      onCreateError: (error) =>
+        console.error("Quick Reminder project planner create failed", error),
+      onAfterCreateError: (error) =>
+        console.error("Quick Reminder project planner refresh failed", error),
+    });
+
+    if (!result.ok) {
+      if ("alreadyExists" in result) {
+        new Notice(getProjectTargetExistsNotice(path));
+        return false;
+      }
+
+      new Notice(
+        result.created
+          ? getProjectCreateRefreshFailedNotice(path)
+          : getProjectCreateFailedNotice(path),
+      );
+      return result.created;
     }
 
-    try {
-      await this.ensureCategoryParentFolders(path);
-      const file = await this.app.vault.create(path, markdown);
-      await this.openProjectNote(file);
-      await this.refreshScrapedTasks();
-      await this.render();
-      new Notice(`Project note created at ${path}`);
-      return true;
-    } catch (error) {
-      console.error("Quick Reminder project planner create failed", error);
-      new Notice(`Quick Reminder: could not create ${path}.`);
-      return false;
-    }
+    new Notice(getProjectCreatedNotice(path));
+    return true;
   }
 
   private async openProjectNote(file: TFile): Promise<void> {
@@ -1828,16 +2474,52 @@ export class ReminderView extends ItemView {
     status: "todo" | "in-progress" | "completed",
     successMessage: string,
   ): Promise<void> {
-    const updated = await this.taskScanner.setCheckboxStatus(task, status);
-    if (!updated) {
-      new Notice("Could not update task. Open the note and update it manually.");
+    const result = await runTaskStatusUpdateWorkflow({
+      updateStatus: () => this.taskScanner.setCheckboxStatus(task, status),
+      afterUpdate: async (updated) => {
+        await this.store.relinkTask(task.id, updated.id);
+        await this.refreshScrapedTasks();
+        this.flashTask(updated.id);
+        await this.render();
+      },
+      onUpdateError: (error) =>
+        console.error("Quick Reminder task status update failed", error),
+      onAfterUpdateError: (error) =>
+        console.error("Quick Reminder task status refresh failed", error),
+    });
+
+    if (!result.ok) {
+      new Notice(
+        result.updated
+          ? getTaskStatusChangedRefreshFailedNotice()
+          : getTaskStatusUpdateFailedNotice(),
+      );
       return;
     }
-    await this.store.relinkTask(task.id, updated.id);
-    await this.refreshScrapedTasks();
-    this.flashTask(updated.id);
-    await this.render();
+
     new Notice(successMessage);
+  }
+
+  private async unignoreTask(taskId: string): Promise<void> {
+    const result = await runTaskIgnoreWorkflow({
+      setIgnored: () => this.store.unignoreTask(taskId),
+      afterSetIgnored: () => this.render(),
+      onSetIgnoredError: (error) =>
+        console.error("Quick Reminder task unignore failed", error),
+      onAfterSetIgnoredError: (error) =>
+        console.error("Quick Reminder task unignore refresh failed", error),
+    });
+
+    if (!result.ok) {
+      new Notice(
+        result.changed
+          ? getTaskUnignoreRefreshFailedNotice()
+          : getTaskUnignoreFailedNotice(),
+      );
+      return;
+    }
+
+    new Notice(getTaskUnignoredNotice());
   }
 
   private flashTask(taskId: string): void {
@@ -1853,30 +2535,52 @@ export class ReminderView extends ItemView {
   }
 
   private async openTaskSource(task: ScrapedTask): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(task.filePath);
-    if (!(file instanceof TFile)) {
-      new Notice("Could not find the source note.");
+    const result = await runTaskSourceOpenWorkflow<TFile, WorkspaceLeaf>({
+      getSource: () => {
+        const file = this.app.vault.getAbstractFileByPath(task.filePath);
+        return file instanceof TFile ? file : null;
+      },
+      getPane: (file) =>
+        this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf(),
+      openPane: async (file, leaf) => {
+        const view = leaf.view as { file?: { path?: string } | null };
+        if (view.file?.path !== file.path) {
+          await leaf.openFile(file, { active: true });
+        }
+      },
+      revealPane: (leaf) => this.app.workspace.revealLeaf(leaf),
+      focusPane: (leaf) => {
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        this.collapseMobileWorkspaceDrawers();
+      },
+      focusCursor: (file, leaf) => {
+        const view = leaf.view as {
+          editor?: {
+            setCursor: (position: { line: number; ch: number }) => void;
+            focus: () => void;
+          };
+        };
+        if (!view.editor) return;
+        view.editor.setCursor({ line: task.line - 1, ch: 0 });
+        view.editor.focus();
+        this.closeDuplicateMainFileLeaves(file, leaf, [0, 100, 300]);
+      },
+      onError: (stage, error) =>
+        console.error(`Quick Reminder task source ${stage} failed`, error),
+    });
+
+    if (!result.ok) {
+      const notice =
+        result.stage === "source"
+          ? getTaskSourceMissingNotice()
+          : result.stage === "pane"
+            ? getTaskSourcePaneMissingNotice()
+            : getTaskSourceOpenFailedNotice();
+      new Notice(notice);
       return;
     }
 
-    const leaf = this.getMainMarkdownLeafForFile(file.path) ?? this.getPreferredMainLeaf();
-    if (!leaf) {
-      new Notice("Quick Reminder could not find a note pane.");
-      return;
-    }
-
-    if (!(leaf.view instanceof MarkdownView) || leaf.view.file?.path !== file.path) {
-      await leaf.openFile(file, { active: true });
-    }
-    await this.app.workspace.revealLeaf(leaf);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    this.collapseMobileWorkspaceDrawers();
-
-    if (leaf.view instanceof MarkdownView) {
-      leaf.view.editor.setCursor({ line: task.line - 1, ch: 0 });
-      leaf.view.editor.focus();
-      this.closeDuplicateMainFileLeaves(file, leaf, [0, 100, 300]);
-    }
+    return;
   }
 
   private collapseMobileWorkspaceDrawers(): void {
@@ -1929,47 +2633,75 @@ export class ReminderView extends ItemView {
       ? getTasksPluginApi(this.app)
       : null;
     if (!api) {
-      new Notice("Tasks plugin API is not available. Reload or enable Tasks.");
+      new Notice(getTasksPluginUnavailableNotice());
       return;
     }
 
-    const currentLine = await this.taskScanner.readTaskLine(task);
-    if (!currentLine) {
-      new Notice("Could not read task line.");
+    const result = await runTaskLineEditWorkflow({
+      readTaskLine: () => this.taskScanner.readTaskLine(task),
+      editTaskLine: (currentLine) => api.editTaskLineModal(currentLine),
+      writeTaskLine: (nextLine) => this.taskScanner.replaceTaskLine(task, nextLine),
+      afterWrite: async (updated) => {
+        await this.store.relinkTask(task.id, updated.id);
+        await this.refreshScrapedTasks();
+        this.flashTask(updated.id);
+        await this.render();
+      },
+      onReadError: (error) => console.error("Quick Reminder task line read failed", error),
+      onEditError: (error) => console.error("Quick Reminder Tasks edit failed", error),
+      onWriteError: (error) => console.error("Quick Reminder task line update failed", error),
+      onAfterWriteError: (error) =>
+        console.error("Quick Reminder task line refresh failed", error),
+    });
+
+    if (!result.ok) {
+      const notice =
+        result.stage === "read"
+          ? getTaskLineReadFailedNotice()
+          : result.stage === "edit"
+            ? getTaskLineEditFailedNotice()
+            : result.stage === "write"
+              ? getTaskLineUpdateFailedNotice()
+              : getTaskLineUpdateRefreshFailedNotice();
+      new Notice(notice);
       return;
     }
 
-    const nextLine = await api.editTaskLineModal(currentLine);
-    if (!nextLine || nextLine === currentLine) return;
+    if (!result.changed) return;
 
-    const updated = await this.taskScanner.replaceTaskLine(task, nextLine);
-    if (!updated) {
-      new Notice("Could not update task line. Open the note and edit it manually.");
-      return;
-    }
-
-    await this.refreshScrapedTasks();
-    await this.render();
-    new Notice("Task updated");
+    new Notice(getTaskUpdatedNotice());
   }
 
-  private async deleteTask(task: ScrapedTask): Promise<void> {
-    new DeleteTaskModal(this.app, task, async () => {
-      await this.confirmDeleteTask(task);
-    }).open();
+  private deleteTask(task: ScrapedTask): void {
+    this.openManagedTaskModal(task, "delete", (release) => {
+      new DeleteTaskModal(this.app, task, async () => {
+        return this.confirmDeleteTask(task);
+      }, release).open();
+    });
   }
 
-  private async confirmDeleteTask(task: ScrapedTask): Promise<void> {
-    const deleted = await this.taskScanner.deleteTaskLine(task);
-    if (!deleted) {
-      new Notice("Could not delete task. Open the note and update it manually.");
-      return;
+  private async confirmDeleteTask(task: ScrapedTask): Promise<boolean> {
+    const result = await runTaskDeleteWorkflow({
+      deleteTask: () => this.taskScanner.deleteTaskLine(task),
+      afterDelete: async () => {
+        await this.store.unignoreTask(task.id);
+        await this.refreshScrapedTasks();
+        await this.render();
+      },
+      onDeleteError: (error) => console.error("Quick Reminder task delete failed", error),
+      onAfterDeleteError: (error) =>
+        console.error("Quick Reminder task delete refresh failed", error),
+    });
+
+    if (!result.ok) {
+      new Notice(
+        result.deleted ? getTaskDeleteRefreshFailedNotice() : getTaskDeleteFailedNotice(),
+      );
+      return result.deleted;
     }
 
-    await this.store.unignoreTask(task.id);
-    await this.refreshScrapedTasks();
-    await this.render();
-    new Notice("Task deleted");
+    new Notice(getTaskDeletedNotice());
+    return true;
   }
 
   private getFilteredScrapedTasks(tasks: ScrapedTask[]): ScrapedTask[] {
@@ -2062,37 +2794,66 @@ export class ReminderView extends ItemView {
       return;
     }
 
-    const managerLeaf = await openMainViewLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
-    if (!managerLeaf) {
-      new Notice("Quick Reminder could not find a note pane.");
-      return;
+    const result = await runDashboardOpenWorkflow({
+      open: () => openMainViewLeaf(this.app.workspace, VIEW_TYPE_REMINDER),
+      refresh: (managerLeaf) => {
+        if (managerLeaf.view instanceof ReminderView) {
+          managerLeaf.view.showActiveFile(file.path, file.parent?.path ?? "");
+        }
+        this.closeMainManagerLeaves(managerLeaf);
+      },
+      onOpenError: (error) =>
+        console.error("Quick Reminder dashboard open failed", error),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder dashboard refresh failed", error),
+    });
+    if (!result.ok) {
+      new Notice(
+        result.opened
+          ? getDashboardRefreshFailedNotice("dashboard")
+          : getDashboardOpenFailedNotice("dashboard"),
+      );
     }
-
-    if (managerLeaf.view instanceof ReminderView) {
-      managerLeaf.view.showActiveFile(file.path, file.parent?.path ?? "");
-    }
-    this.closeMainManagerLeaves(managerLeaf);
   }
 
   private async openVaultDashboard(): Promise<void> {
-    // Reuses the active note's leaf rather than splitting the workspace.
-    // Splitting was producing the side-by-side panes the user pushed back on.
-    const leaf = findOrReuseMainPaneLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
     const state = {
       ...this.getViewState(),
       taskScope: "vault" as TaskDashboardScope,
       selectedFolderPath: null,
     };
-    if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
-      await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+
+    const result = await runDashboardOpenWorkflow({
+      open: async () => {
+        // Reuses the active note's leaf rather than splitting the workspace.
+        // Splitting was producing the side-by-side panes the user pushed back on.
+        const leaf = findOrReuseMainPaneLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
+        if (leaf.view.getViewType() !== VIEW_TYPE_REMINDER) {
+          await leaf.setViewState({ type: VIEW_TYPE_REMINDER, active: true });
+        }
+        await this.app.workspace.revealLeaf(leaf);
+        collapseRightSidebar(this.app.workspace);
+        return leaf;
+      },
+      refresh: async (leaf) => {
+        if (leaf.view instanceof ReminderView) {
+          leaf.view.applyViewState(state);
+          await leaf.view.render(true);
+        }
+        this.closeMainManagerLeaves(leaf);
+      },
+      onOpenError: (error) =>
+        console.error("Quick Reminder vault dashboard open failed", error),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder vault dashboard refresh failed", error),
+    });
+    if (!result.ok) {
+      new Notice(
+        result.opened
+          ? getDashboardRefreshFailedNotice("dashboard")
+          : getDashboardOpenFailedNotice("dashboard"),
+      );
     }
-    await this.app.workspace.revealLeaf(leaf);
-    collapseRightSidebar(this.app.workspace);
-    if (leaf.view instanceof ReminderView) {
-      leaf.view.applyViewState(state);
-      void leaf.view.render(true);
-    }
-    this.closeMainManagerLeaves(leaf);
   }
 
   private getDashboardSourceFile(): TFile | null {
@@ -2120,18 +2881,33 @@ export class ReminderView extends ItemView {
   private async openAsSidebar(): Promise<void> {
     const state = this.getViewState();
 
-    const leaf = await this.openSidebarLeaf();
-    if (!leaf) {
-      new Notice("Quick Reminder could not open the sidebar.");
-      return;
+    const result = await runDashboardOpenWorkflow({
+      open: async () => {
+        const leaf = await this.openSidebarLeaf();
+        if (!leaf) return null;
+        if (isRightSidebarLeaf(leaf)) expandRightSidebar(this.app.workspace);
+        await this.app.workspace.revealLeaf(leaf);
+        return leaf;
+      },
+      refresh: async (leaf) => {
+        if (leaf.view instanceof ReminderView) {
+          leaf.view.applyViewState(state);
+          await leaf.view.render(true);
+        }
+        this.closeOtherManagerLeaves(leaf);
+      },
+      onOpenError: (error) =>
+        console.error("Quick Reminder sidebar open failed", error),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder sidebar refresh failed", error),
+    });
+    if (!result.ok) {
+      new Notice(
+        result.opened
+          ? getDashboardRefreshFailedNotice("sidebar")
+          : getDashboardOpenFailedNotice("sidebar"),
+      );
     }
-    if (isRightSidebarLeaf(leaf)) expandRightSidebar(this.app.workspace);
-    await this.app.workspace.revealLeaf(leaf);
-    if (leaf.view instanceof ReminderView) {
-      leaf.view.applyViewState(state);
-      void leaf.view.render(true);
-    }
-    this.closeOtherManagerLeaves(leaf);
   }
 
   private getViewState(): ReminderViewState {
@@ -2291,11 +3067,14 @@ interface TasksPluginApi {
 
 class IgnoreTaskModal extends Modal {
   private noteEl!: HTMLTextAreaElement;
+  private submitBtn!: HTMLButtonElement;
+  private isSubmitting = false;
 
   constructor(
     app: App,
     private task: ScrapedTask,
-    private onSubmit: (note: string) => void | Promise<void>,
+    private onSubmit: (note: string) => ModalSubmitResult | Promise<ModalSubmitResult>,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -2327,7 +3106,8 @@ class IgnoreTaskModal extends Modal {
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
       this.close();
     };
-    actions.createEl("button", { text: "Ignore", cls: "qr-primary-btn" }).onclick = () => {
+    this.submitBtn = actions.createEl("button", { text: "Ignore", cls: "qr-primary-btn" });
+    this.submitBtn.onclick = () => {
       void this.submit();
     };
 
@@ -2338,20 +3118,43 @@ class IgnoreTaskModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private async submit(): Promise<void> {
     const note = this.noteEl.value.trim();
-    await this.onSubmit(note);
-    this.close();
+    const result = await runSingleModalSubmit({
+      isSubmitting: () => this.isSubmitting,
+      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
+      submit: () => this.onSubmit(note),
+    });
+    if (result.started && shouldCloseAfterSubmit(result.result)) {
+      this.close();
+    }
+  }
+
+  private setSubmitting(isSubmitting: boolean): void {
+    this.isSubmitting = isSubmitting;
+    if (!this.submitBtn) return;
+    const presentation = getModalSubmitButtonPresentation(
+      isSubmitting,
+      "Ignore",
+      "Ignoring...",
+    );
+    this.submitBtn.disabled = presentation.disabled;
+    this.submitBtn.setText(presentation.text);
   }
 }
 
 class DeleteTaskModal extends Modal {
+  private submitBtn!: HTMLButtonElement;
+  private isSubmitting = false;
+
   constructor(
     app: App,
     private task: ScrapedTask,
-    private onConfirm: () => void | Promise<void>,
+    private onConfirm: () => ModalSubmitResult | Promise<ModalSubmitResult>,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -2373,24 +3176,49 @@ class DeleteTaskModal extends Modal {
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
       this.close();
     };
-    actions.createEl("button", { text: "Delete", cls: "qr-primary-btn qr-view-del" }).onclick = () => {
+    this.submitBtn = actions.createEl("button", {
+      text: "Delete",
+      cls: "qr-primary-btn qr-view-del",
+    });
+    this.submitBtn.onclick = () => {
       void this.submit();
     };
   }
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private async submit(): Promise<void> {
-    await this.onConfirm();
-    this.close();
+    const result = await runSingleModalSubmit({
+      isSubmitting: () => this.isSubmitting,
+      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
+      submit: () => this.onConfirm(),
+    });
+    if (result.started && shouldCloseAfterSubmit(result.result)) {
+      this.close();
+    }
+  }
+
+  private setSubmitting(isSubmitting: boolean): void {
+    this.isSubmitting = isSubmitting;
+    if (!this.submitBtn) return;
+    const presentation = getModalSubmitButtonPresentation(
+      isSubmitting,
+      "Delete",
+      "Deleting...",
+    );
+    this.submitBtn.disabled = presentation.disabled;
+    this.submitBtn.setText(presentation.text);
   }
 }
 
 class TaskContextNoteModal extends Modal {
   private noteEl!: HTMLTextAreaElement;
   private statusEl!: HTMLDivElement;
+  private submitBtn!: HTMLButtonElement;
+  private isSubmitting = false;
   private status: TaskStatusPick;
   private readonly initialStatus: TaskStatusPick;
 
@@ -2400,8 +3228,9 @@ class TaskContextNoteModal extends Modal {
     private onSubmit: (
       rawNoteBlock: string,
       statusChange: TaskStatusPick | null,
-    ) => void | Promise<void>,
+    ) => ModalSubmitResult | Promise<ModalSubmitResult>,
     private onOpenTasksEditor: (() => void) | null = null,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
     this.initialStatus = mapTaskKindToStatusPick(task);
@@ -2457,7 +3286,8 @@ class TaskContextNoteModal extends Modal {
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
       this.close();
     };
-    actions.createEl("button", { text: "Save", cls: "qr-primary-btn" }).onclick = () => {
+    this.submitBtn = actions.createEl("button", { text: "Save", cls: "qr-primary-btn" });
+    this.submitBtn.onclick = () => {
       void this.submit();
     };
 
@@ -2484,12 +3314,31 @@ class TaskContextNoteModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private async submit(): Promise<void> {
     const statusChange = this.status === this.initialStatus ? null : this.status;
-    await this.onSubmit(this.noteEl.value, statusChange);
-    this.close();
+    const result = await runSingleModalSubmit({
+      isSubmitting: () => this.isSubmitting,
+      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
+      submit: () => this.onSubmit(this.noteEl.value, statusChange),
+    });
+    if (result.started && shouldCloseAfterSubmit(result.result)) {
+      this.close();
+    }
+  }
+
+  private setSubmitting(isSubmitting: boolean): void {
+    this.isSubmitting = isSubmitting;
+    if (!this.submitBtn) return;
+    const presentation = getModalSubmitButtonPresentation(
+      isSubmitting,
+      "Save",
+      "Saving...",
+    );
+    this.submitBtn.disabled = presentation.disabled;
+    this.submitBtn.setText(presentation.text);
   }
 }
 
@@ -2506,6 +3355,7 @@ class NewItemModal extends Modal {
     private onTask: () => void,
     private onReminder: () => void,
     private onProjectPlanner: () => void,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -2553,6 +3403,7 @@ class NewItemModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 }
 
@@ -2571,13 +3422,16 @@ class NewTaskModal extends Modal {
   private detailsEl!: HTMLTextAreaElement;
   private previewEl!: HTMLDivElement;
   private statusEl!: HTMLDivElement;
+  private submitBtn!: HTMLButtonElement;
   private status: TaskStatusPick = "todo";
+  private isSubmitting = false;
 
   constructor(
     app: App,
     private withReminder: boolean,
     private initialFilePath: string,
-    private onSubmit: (request: NewTaskRequest) => void | Promise<void>,
+    private onSubmit: (request: NewTaskRequest) => ModalSubmitResult | Promise<ModalSubmitResult>,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -2644,10 +3498,11 @@ class NewTaskModal extends Modal {
 
     const actions = this.contentEl.createDiv({ cls: "qr-modal-actions" });
     actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => this.close();
-    actions.createEl("button", {
-      text: this.withReminder ? "Create task + reminder" : "Create task",
+    this.submitBtn = actions.createEl("button", {
+      text: this.submitLabel(),
       cls: "qr-primary-btn",
-    }).onclick = () => {
+    });
+    this.submitBtn.onclick = () => {
       void this.submit();
     };
     window.setTimeout(() => this.inputEl.focus(), 0);
@@ -2741,21 +3596,43 @@ class NewTaskModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private async submit(): Promise<void> {
     const value = this.inputEl.value.trim();
     if (!value) {
-      new Notice("Enter a task.");
+      new Notice(getTaskCreateTextMissingNotice());
       return;
     }
-    await this.onSubmit({
-      rawInput: value,
-      status: this.status,
-      targetFilePath: this.targetFileEl.value.trim() || DEFAULT_CATEGORY_FILE_PATH,
-      details: this.detailsEl.value,
+    const result = await runSingleModalSubmit({
+      isSubmitting: () => this.isSubmitting,
+      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
+      submit: () => this.onSubmit({
+        rawInput: value,
+        status: this.status,
+        targetFilePath: this.targetFileEl.value.trim() || DEFAULT_CATEGORY_FILE_PATH,
+        details: this.detailsEl.value,
+      }),
     });
-    this.close();
+    if (result.started && shouldCloseAfterSubmit(result.result)) {
+      this.close();
+    }
+  }
+
+  private submitLabel(): string {
+    return this.withReminder ? "Create task + reminder" : "Create task";
+  }
+
+  private submittingLabel(): string {
+    return this.withReminder ? "Creating task + reminder..." : "Creating task...";
+  }
+
+  private setSubmitting(isSubmitting: boolean): void {
+    this.isSubmitting = isSubmitting;
+    if (!this.submitBtn) return;
+    this.submitBtn.disabled = isSubmitting;
+    this.submitBtn.setText(isSubmitting ? this.submittingLabel() : this.submitLabel());
   }
 
   private attachMarkdownFileOptions(input: HTMLInputElement): void {

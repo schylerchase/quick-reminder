@@ -376,11 +376,11 @@ export class TaskScanner {
     return line ?? null;
   }
 
-  async replaceTaskLine(task: ScrapedTask, nextLine: string): Promise<boolean> {
+  async replaceTaskLine(task: ScrapedTask, nextLine: string): Promise<ScrapedTask | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
-    if (!(file instanceof TFile)) return false;
+    if (!(file instanceof TFile)) return null;
 
-    let changed = false;
+    let updated: ScrapedTask | null = null;
 
     this.onWillModifyFile(file.path);
     await this.app.vault.process(file, (content) => {
@@ -390,12 +390,17 @@ export class TaskScanner {
       const line = lines[index];
       if (!line || !CHECKBOX_TASK_RE.test(line)) return content;
 
+      const nextTask = parseCheckboxTask(file, nextLine, task.line, task.category);
+      if (!nextTask) return content;
+      nextTask.contextNotes = task.contextNotes;
+      nextTask.contextNoteLines = task.contextNoteLines;
+
       lines[index] = nextLine;
-      changed = true;
+      updated = nextTask;
       return lines.join(newline);
     });
 
-    return changed;
+    return updated;
   }
 
   async deleteTaskLine(task: ScrapedTask): Promise<boolean> {

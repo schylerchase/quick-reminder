@@ -14,11 +14,20 @@ import {
   renderProjectPlanMarkdown,
   validateProjectPlan,
 } from "./lib/projectPlanner";
+import {
+  runSingleModalSubmit,
+  shouldCloseAfterSubmit,
+  type ModalSubmitResult,
+} from "./lib/modalSubmit";
+import {
+  getProjectMarkdownCopiedNotice,
+  getProjectMarkdownCopyFailedNotice,
+} from "./lib/projectPlannerMessages";
 
 type ProjectPlannerSubmit = (
   plan: ProjectPlan,
   markdown: string,
-) => boolean | Promise<boolean>;
+) => ModalSubmitResult | Promise<ModalSubmitResult>;
 
 const SAMPLE_OUTLINE = [
   "Project: Client onboarding",
@@ -43,10 +52,12 @@ export class ProjectPlannerModal extends Modal {
   private validationEl!: HTMLDivElement;
   private createBtn!: HTMLButtonElement;
   private plan: ProjectPlan = { title: "", filePath: "", phases: [] };
+  private isSubmitting = false;
 
   constructor(
     app: App,
     private onSubmit: ProjectPlannerSubmit,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -111,6 +122,7 @@ export class ProjectPlannerModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private renderTextField(parent: HTMLElement, label: string, placeholder: string): HTMLInputElement {
@@ -212,7 +224,14 @@ export class ProjectPlannerModal extends Modal {
     const plan = this.currentPlan();
     const errors = validateProjectPlan(plan);
     this.validationEl.empty();
-    this.createBtn.disabled = errors.length > 0;
+    this.createBtn.disabled = this.isSubmitting || errors.length > 0;
+    if (this.isSubmitting) {
+      this.validationEl.createDiv({
+        text: `Creating ${plan.filePath}`,
+        cls: "qr-preview-status is-ready",
+      });
+      return;
+    }
     if (errors.length === 0) {
       this.validationEl.createDiv({
         text: `Ready to create ${plan.filePath}`,
@@ -255,10 +274,10 @@ export class ProjectPlannerModal extends Modal {
     }
     try {
       await navigator.clipboard.writeText(renderProjectPlanMarkdown(plan));
-      new Notice("Project Markdown copied.");
+      new Notice(getProjectMarkdownCopiedNotice());
     } catch (error) {
       console.error("Quick Reminder project planner copy failed", error);
-      new Notice("Quick Reminder could not copy the project Markdown.");
+      new Notice(getProjectMarkdownCopyFailedNotice());
     }
   }
 
@@ -271,8 +290,21 @@ export class ProjectPlannerModal extends Modal {
       return;
     }
 
-    const saved = await this.onSubmit(plan, renderProjectPlanMarkdown(plan));
-    if (saved) this.close();
+    const result = await runSingleModalSubmit({
+      isSubmitting: () => this.isSubmitting,
+      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
+      submit: () => this.onSubmit(plan, renderProjectPlanMarkdown(plan)),
+    });
+    if (result.started && shouldCloseAfterSubmit(result.result)) {
+      this.close();
+    }
+  }
+
+  private setSubmitting(isSubmitting: boolean): void {
+    this.isSubmitting = isSubmitting;
+    if (!this.createBtn || !this.validationEl) return;
+    this.createBtn.setText(isSubmitting ? "Creating project note..." : "Create project note");
+    this.renderValidation();
   }
 
   private attachMarkdownFileOptions(input: HTMLInputElement): void {

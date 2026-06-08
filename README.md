@@ -2,7 +2,7 @@
 
 Natural-language reminders for Obsidian, with desktop notifications where available and in-app notices on mobile. Type `call mom tomorrow 3pm`, get notified. Also includes a lightweight Markdown task dashboard and project planner for working with `- [ ]` task lines and `TODO:` / `FIXME:` / `TASK:` markers in your notes.
 
-This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, local reminder notices, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder will optionally call its task editor when you create a task reminder from the editor.
+This plugin is not a replacement for the Tasks plugin. It focuses on natural-language reminders, local reminder notices, and a fast way to see and update existing Markdown tasks. If the Tasks plugin is installed, Quick Reminder can optionally open its task editor from the dashboard **Edit** action.
 
 ## What it does
 
@@ -41,6 +41,8 @@ BRAT will install the latest GitHub release into the current vault and can check
 4. Select your Obsidian vault folder.
 5. In Obsidian, go to **Settings -> Community plugins** and enable **Quick Reminder**.
 
+The release ZIP includes the production plugin files (`main.js`, `manifest.json`, `styles.css`), `versions.json`, and the macOS/Windows helper installers.
+
 ### Manual install
 
 Copy these release assets into your vault:
@@ -71,6 +73,9 @@ For full docs, see the in-repo wiki pages in [`docs/wiki/Home.md`](docs/wiki/Hom
 | Open capture modal | Command palette -> "Quick capture reminder" |
 | Create task or task-backed reminder | Manager -> New |
 | Create project note from outline | Manager -> New -> Project Planner |
+| Create reminder from selected text | Editor context menu -> "Create reminder from selection", or command palette -> "Convert selection to reminder" |
+| Add reminder from the current task line | Editor context menu -> "Add task reminder" |
+| Reveal the current note in Files | Command palette -> "Reveal active file in file explorer" |
 | View/snooze/edit/done reminders | Reminder manager |
 | Scan vault tasks | Reminder manager -> Scan |
 | Insert task sections | Command palette -> "Insert task sections" |
@@ -119,7 +124,7 @@ Quick Reminder updates the original Markdown task line. It does not create a sep
 
 1. Open the manager and click **New**.
 2. Choose **Project Planner**.
-3. Paste a rough outline with `Project:`, `File:`, headings, tasks, and indented notes.
+3. Paste a rough outline with `Project:`, `File:`, headings, tasks, and indented notes. `File: Projects/` creates the note inside that folder using the project name.
 4. Review the editable preview, then click **Create project note**.
 
 Quick Reminder creates a normal vault note, opens it, refreshes the dashboard, and leaves dated task reminders for the existing **Add reminder** flow. It does not bulk-schedule reminders automatically.
@@ -132,7 +137,7 @@ Quick Reminder creates a normal vault note, opens it, refreshes the dashboard, a
    ```
 2. Open the manager and find the task card.
 3. Click **Add reminder**.
-4. Quick Reminder links the reminder back to that task so the dashboard can show that the task already has reminder context.
+4. Quick Reminder links the reminder back to that task. The task card shows **Reminder set** and the reminder action changes to **Added**.
 
 If **Add reminder** is disabled, the task probably does not contain a future time phrase. Add something like `in 30 minutes`, `tomorrow 9am`, or `Friday 2pm`.
 
@@ -165,7 +170,7 @@ Open the sidebar manager when you want a companion panel beside your note. Open 
 
 Dashboard is adaptive: if a markdown note is active, Quick Reminder becomes the active main tab, filters to that note, and opens the source note as the next tab. If no note is active, it opens in **Whole vault** scope. Use the scope filter inside the dashboard to switch between **Current file**, **Current folder**, and **Whole vault**.
 
-The dashboard remembers the last scope, search, source filter, sort order, and active note. If the remembered file or folder context is missing, it falls back to **Whole vault** so the task list does not open empty by default.
+The dashboard remembers the last scope, search, source filter, sort order, and active note. If the remembered file or folder context is missing, it falls back to **Whole vault** so the task list does not open empty by default. If **Current file** or **Current folder** has no open tasks but the vault does, use **Show whole vault** from the empty task section.
 
 ### Create reminders
 
@@ -193,13 +198,16 @@ TASK: marker item
 In the task dashboard:
 
 - **New** lets you create a plain task, a reminder task, or a Project Planner note. Reminder tasks are first added to the current/last active source note, then the reminder is linked to that task.
+- **Search**, **scope**, **source**, and **sort** controls narrow the visible task list by text, current file/folder/vault, checkbox vs marker source, and page order vs priority.
 - **Show** jumps to the source note and line.
 - **In progress** changes `- [ ]` to `- [/]` and adds `[inProgress:: YYYY-MM-DD HH:mm]`.
 - **To do** changes `- [/]` or `- [x]` back to `- [ ]` and removes status timestamps.
 - **Done** changes a checkbox task to `- [x]` and adds `[completion:: YYYY-MM-DD HH:mm]`.
-- **Edit** opens the Tasks plugin editor when the Tasks plugin API is available.
+- **Edit** updates the source task line. It opens the Tasks plugin editor when that integration is enabled and available; otherwise it uses Quick Reminder's inline text editor.
+- **Note** edits dashboard-only notes stored beside the source task.
 - **Delete** removes the task line from the source note.
 - **Ignore** hides a task from the normal dashboard without deleting it.
+- **Add reminder** appears only when Quick Reminder detects a future time. After a linked reminder exists, the task card shows **Reminder set** and duplicate creation is blocked.
 
 The dashboard refreshes while it is open when markdown files are saved, created, deleted, or renamed. Refreshes are debounced so normal typing does not trigger a vault scan on every keystroke.
 
@@ -215,7 +223,7 @@ Use the dashboard scope selector:
 - **Current folder** shows tasks from the active or selected folder.
 - **Whole vault** shows tasks from all markdown notes.
 
-The sidebar is best for current-note or current-folder companion work. The dashboard is best when you want the task manager on the main screen. Right-click a file or folder in Obsidian's file explorer to show tasks for that file or folder in Quick Reminder.
+The sidebar is best for current-note or current-folder companion work. The dashboard is best when you want the task manager on the main screen. Right-click a file or folder in Obsidian's file explorer to show tasks for that file or folder in Quick Reminder. Scoped empty sections offer **Show whole vault** when matching tasks exist elsewhere.
 
 ### Vault task dashboard
 
@@ -299,7 +307,7 @@ Not at the exact due time. Quick Reminder schedules reminders inside Obsidian, s
 
 ### Do I need the Tasks plugin?
 
-No. Quick Reminder works with normal Markdown task lines by itself. If the Tasks plugin is installed and enabled, Quick Reminder can optionally open the Tasks editor for task-backed reminders.
+No. Quick Reminder works with normal Markdown task lines by itself. If the Tasks plugin is installed and enabled, Quick Reminder can optionally open the Tasks editor from dashboard task cards.
 
 ### Why is Add reminder disabled for a task?
 
@@ -335,7 +343,7 @@ Use the sidebar when you are working beside a note. Use **Dashboard** when you w
 
 ## Integrations
 
-- **Tasks plugin (optional).** If the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) is installed and enabled, Quick Reminder will open its task-editor modal when you create a task reminder from the editor. If it is missing or disabled, Quick Reminder falls back to its own capture modal. Toggle this under **Settings -> Quick Reminder -> Tasks plugin integration**.
+- **Tasks plugin (optional).** If the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) is installed and enabled, Quick Reminder can open its task-editor modal from dashboard task cards. If it is missing or disabled, Quick Reminder uses its own inline task editor. Toggle this under **Settings -> Quick Reminder -> Tasks plugin integration**.
 - **KB Manager (optional).** If you install the companion [KB Manager](https://github.com/schylerchase/kb-manager) plugin, KB Manager can route its "review this KB area" reminders into Quick Reminder when it is available. When Quick Reminder is missing or disabled, KB Manager writes a plain Markdown review task to a configured note instead. Quick Reminder itself never depends on KB Manager.
 
 ## Architecture

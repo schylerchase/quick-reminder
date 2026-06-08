@@ -42,6 +42,7 @@ import {
   insertManagedBlockIfNeeded,
   regenerateManagedBlock,
 } from "./lib/managedTasksOps";
+import { getManagedBlockUpdateFailedNotice } from "./lib/taskEditMessages";
 import {
   getRibbonIconIndex,
   restoreRibbonIconIndex,
@@ -51,6 +52,41 @@ import {
   buildStarterBoardMarkdown,
   STARTER_BOARD_HEADINGS,
 } from "./lib/starterBoard";
+import {
+  getDashboardPaneMissingNotice,
+} from "./lib/dashboardState";
+import {
+  getFileRevealFailedNotice,
+  getFileRevealMissingActiveFileNotice,
+  getFileRevealSuccessNotice,
+} from "./lib/fileRevealMessages";
+import {
+  getStarterBoardOpenFailedNotice,
+  getStarterBoardPathInvalidNotice,
+  getStarterBoardPathUnavailableNotice,
+  getStarterBoardReadyNotice,
+  getStarterBoardSetupFailedNotice,
+} from "./lib/starterBoardMessages";
+import { runStarterBoardWorkflow } from "./lib/starterBoardWorkflow";
+import {
+  getTaskSectionsAlreadyPresentNotice,
+  getTaskSectionsInsertedNotice,
+  getTaskSectionsMissingNoteNotice,
+} from "./lib/taskSectionMessages";
+import {
+  getReminderCreatedNotice,
+  getReminderPastTimeNotice,
+  getReminderSaveFailedNotice,
+  getReminderSelectionMissingNotice,
+  getReminderSelectionTimeMissingNotice,
+  getTaskReminderCreatedNotice,
+  getTaskReminderTimeMissingNotice,
+} from "./lib/reminderMessages";
+import {
+  runKeyedSingleAction,
+  runKeyedSingleOpen,
+  type SingleActionResult,
+} from "./lib/singleAction";
 
 export default class QuickReminderPlugin extends Plugin {
   store!: ReminderStore;
@@ -59,6 +95,8 @@ export default class QuickReminderPlugin extends Plugin {
   private selectedTaskFolderPath: string | null = null;
   /** True after onunload; guards async onLayoutReady callbacks. */
   private isUnloaded = false;
+  private openModalKeys = new Set<string>();
+  private runningActionKeys = new Set<string>();
   /**
    * Subscribers (currently the ReminderView) that want to know when an
    * internal taskScanner write is about to fire — used to suppress the
@@ -81,6 +119,61 @@ export default class QuickReminderPlugin extends Plugin {
     }
   };
 
+  private openPluginModal(
+    key: string,
+    open: (release: () => void) => void,
+  ): void {
+    runKeyedSingleOpen({
+      openKeys: this.openModalKeys,
+      key,
+      open,
+    });
+  }
+
+  private async runPluginAction<T>(
+    key: string,
+    run: () => T | Promise<T>,
+  ): Promise<SingleActionResult<T>> {
+    return runKeyedSingleAction({
+      runningKeys: this.runningActionKeys,
+      key,
+      run,
+    });
+  }
+
+  private openCaptureModal(
+    initialInput = "",
+    sourceTaskId: string | null = null,
+    onSaveReminder: ((reminder: Reminder, rawInput: string) => void | Promise<void>) | null = null,
+    selectInitialInput = true,
+    key = `capture:${sourceTaskId ?? "manual"}`,
+  ): void {
+    this.openPluginModal(key, (release) => {
+      new QuickCaptureModal(
+        this.app,
+        this.store,
+        this.scheduler,
+        initialInput,
+        sourceTaskId,
+        onSaveReminder,
+        selectInitialInput,
+        release,
+      ).open();
+    });
+  }
+
+  private openReminderListModal(): void {
+    this.openPluginModal("reminder-list", (release) => {
+      new ReminderListModal(
+        this.app,
+        this.store,
+        this.scheduler,
+        (text = "") => this.openCaptureModal(text),
+        release,
+      ).open();
+    });
+  }
+
   async onload(): Promise<void> {
     // Register view FIRST — before any await — so Obsidian's workspace
     // restore can place leaves at their saved sidebar positions. Registering
@@ -100,7 +193,7 @@ export default class QuickReminderPlugin extends Plugin {
           this.taskScanner,
           (fn) => this.registerSelfModifySubscriber(fn),
           (file, transform) => this.applyManagedBlockTransform(file, transform),
-          () => this.createOrOpenStarterBoard(),
+          () => this.startWithTemplateDashboard(),
         ),
     );
 
@@ -135,20 +228,15 @@ export default class QuickReminderPlugin extends Plugin {
       id: "quick-capture",
       name: "Quick capture reminder",
       callback: () => {
-        new QuickCaptureModal(
-          this.app,
-          this.store,
-          this.scheduler,
-          this.getActiveMarkdownTaskText(),
-        ).open();
+        this.openCaptureModal(this.getActiveMarkdownTaskText());
       },
     });
 
     this.addCommand({
       id: "list-pending",
-      name: "Show pending reminders (modal)",
+      name: "Open reminders modal",
       callback: () => {
-        new ReminderListModal(this.app, this.store, this.scheduler).open();
+        this.openReminderListModal();
       },
     });
 
@@ -172,7 +260,7 @@ export default class QuickReminderPlugin extends Plugin {
       id: "start-with-template-dashboard",
       name: "Start with template dashboard",
       callback: () => {
-        void this.createOrOpenStarterBoard();
+        void this.startWithTemplateDashboard();
       },
     });
 
@@ -188,7 +276,9 @@ export default class QuickReminderPlugin extends Plugin {
       id: "convert-selection",
       name: "Convert selection to reminder",
       editorCallback: (editor: Editor, view: MarkdownView) => {
-        void this.convertSelectionToReminder(editor, view);
+        void this.runPluginAction("convert-selection", () =>
+          this.convertSelectionToReminder(editor, view),
+        );
       },
     });
 
@@ -246,15 +336,13 @@ export default class QuickReminderPlugin extends Plugin {
             )
             .setIcon("calendar-plus")
             .onClick(() => {
-              new QuickCaptureModal(
-                this.app,
-                this.store,
-                this.scheduler,
+              this.openCaptureModal(
                 this.getEditorTaskSeed(editor),
                 null,
                 null,
                 false,
-              ).open();
+                "editor-capture",
+              );
             });
         });
         if (this.isTasksIntegrationAvailable()) {
@@ -263,9 +351,13 @@ export default class QuickReminderPlugin extends Plugin {
               .setTitle("Add task reminder")
               .setIcon("list-plus")
               .onClick(() => {
-                void this.addTaskReminderFromEditor(
-                  editor,
-                  view as MarkdownView,
+                void this.runPluginAction(
+                  "editor-task-reminder",
+                  () =>
+                    this.addTaskReminderFromEditor(
+                      editor,
+                      view as MarkdownView,
+                    ),
                 );
               });
           });
@@ -275,15 +367,13 @@ export default class QuickReminderPlugin extends Plugin {
               .setTitle("Add task reminder")
               .setIcon("list-plus")
               .onClick(() => {
-                new QuickCaptureModal(
-                  this.app,
-                  this.store,
-                  this.scheduler,
+                this.openCaptureModal(
                   this.getEditorTaskSeed(editor),
                   null,
                   null,
                   false,
-                ).open();
+                  "editor-task-reminder",
+                );
               });
           });
         }
@@ -379,54 +469,71 @@ export default class QuickReminderPlugin extends Plugin {
     this.scheduler?.cancelAll();
   }
 
-  async createOrOpenStarterBoard(): Promise<void> {
+  async createOrOpenStarterBoard(): Promise<boolean> {
     const path = normalizePath(
       this.store.settings.starterBoardFilePath || DEFAULT_STARTER_BOARD_FILE_PATH,
     );
     if (!path.endsWith(".md")) {
-      new Notice("Quick Reminder starter board path must end in .md");
-      return;
+      new Notice(getStarterBoardPathInvalidNotice(path));
+      return false;
     }
 
-    try {
-      await this.ensureParentFolders(path);
-      const existing = this.app.vault.getAbstractFileByPath(path);
-      let file: TFile;
-
-      if (existing instanceof TFile) {
-        file = existing;
-      } else {
-        if (existing) {
-          new Notice(
-            "Quick Reminder starter board path is already used by a folder.",
-          );
-          return;
-        }
-        file = await this.app.vault.create(
-          path,
-          buildStarterBoardMarkdown(new Date()),
-        );
-      }
-
-      await this.store.updateSettings({
-        starterBoardFilePath: path,
-        taskSectionHeadings: STARTER_BOARD_HEADINGS,
-        taskDashboardState: {
-          ...this.store.settings.taskDashboardState,
-          scope: "active",
-          selectedFolderPath: file.parent?.path || null,
-          lastMarkdownPath: file.path,
-          lastFolderPath: file.parent?.path ?? null,
-        },
-      });
-
-      await this.openFileInMainPane(file);
-      await this.openTaskDashboard();
-      new Notice("Quick Reminder starter dashboard ready.");
-    } catch (error) {
-      console.error("Quick Reminder starter dashboard failed", error);
-      new Notice("Quick Reminder could not create the starter dashboard.");
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing !== null && !(existing instanceof TFile)) {
+      new Notice(getStarterBoardPathUnavailableNotice(path));
+      return false;
     }
+
+    const result = await runStarterBoardWorkflow({
+      getBoardFile: async () => {
+        await this.ensureParentFolders(path);
+        return existing instanceof TFile
+          ? existing
+          : this.app.vault.create(
+              path,
+              buildStarterBoardMarkdown(new Date()),
+            );
+      },
+      afterBoardReady: async (file) => {
+        await this.store.updateSettings({
+          starterBoardFilePath: path,
+          taskSectionHeadings: STARTER_BOARD_HEADINGS,
+          taskDashboardState: {
+            ...this.store.settings.taskDashboardState,
+            scope: "active",
+            selectedFolderPath: file.parent?.path || null,
+            lastMarkdownPath: file.path,
+            lastFolderPath: file.parent?.path ?? null,
+          },
+        });
+
+        await this.openFileInMainPane(file);
+        await this.openTaskDashboard();
+      },
+      onBoardError: (error) =>
+        console.error("Quick Reminder starter dashboard open failed", error),
+      onSetupError: (error) =>
+        console.error("Quick Reminder starter dashboard setup failed", error),
+    });
+
+    if (!result.ok) {
+      new Notice(
+        result.boardReady
+          ? getStarterBoardSetupFailedNotice(path)
+          : getStarterBoardOpenFailedNotice(),
+      );
+      return false;
+    }
+
+    new Notice(getStarterBoardReadyNotice(path));
+    return true;
+  }
+
+  async startWithTemplateDashboard(): Promise<boolean> {
+    const result = await this.runPluginAction("starter-board", () =>
+      this.createOrOpenStarterBoard(),
+    );
+    return result.started ? result.result : false;
   }
 
   private async openFileInMainPane(file: TFile): Promise<void> {
@@ -502,7 +609,7 @@ export default class QuickReminderPlugin extends Plugin {
       });
     } catch (error) {
       console.error("Quick Reminder managed block transform failed", error);
-      new Notice("Quick Reminder: failed to update managed tasks block");
+      new Notice(getManagedBlockUpdateFailedNotice());
     }
   }
 
@@ -698,7 +805,7 @@ export default class QuickReminderPlugin extends Plugin {
 
     const managerLeaf = await openMainViewLeaf(this.app.workspace, VIEW_TYPE_REMINDER);
     if (!managerLeaf) {
-      new Notice("Quick Reminder could not find a note pane.");
+      new Notice(getDashboardPaneMissingNotice());
       return;
     }
 
@@ -785,17 +892,17 @@ export default class QuickReminderPlugin extends Plugin {
   ): Promise<void> {
     const selection = editor.getSelection().trim();
     if (!selection) {
-      new Notice("No text selected.");
+      new Notice(getReminderSelectionMissingNotice());
       return;
     }
 
     const parsed = parseReminder(selection);
     if (!parsed.dueAt) {
-      new Notice("No time detected in selection. Add e.g. 'tomorrow 3pm'.");
+      new Notice(getReminderSelectionTimeMissingNotice());
       return;
     }
     if (parsed.dueAt <= Date.now()) {
-      new Notice("Detected time is in the past.");
+      new Notice(getReminderPastTimeNotice());
       return;
     }
 
@@ -819,12 +926,15 @@ export default class QuickReminderPlugin extends Plugin {
       );
     } catch (err) {
       console.error("Quick Reminder selection reminder failed", err);
-      new Notice("Quick Reminder: could not save reminder - see console");
+      new Notice(getReminderSaveFailedNotice());
       return;
     }
 
     new Notice(
-      `Reminder: ${reminder.text} - ${new Date(reminder.dueAt).toLocaleString()}`,
+      getReminderCreatedNotice(
+        reminder.text,
+        new Date(reminder.dueAt).toLocaleString(),
+      ),
     );
   }
 
@@ -848,10 +958,7 @@ export default class QuickReminderPlugin extends Plugin {
       return;
     }
 
-    new QuickCaptureModal(
-      this.app,
-      this.store,
-      this.scheduler,
+    this.openCaptureModal(
       initialText,
       null,
       async (reminder, rawInput) => {
@@ -874,7 +981,8 @@ export default class QuickReminderPlugin extends Plugin {
         await this.activateView(false);
       },
       false,
-    ).open();
+      "editor-task-reminder",
+    );
   }
 
   isTasksIntegrationAvailable(): boolean {
@@ -934,7 +1042,7 @@ export default class QuickReminderPlugin extends Plugin {
   ): Promise<void> {
     const parsed = parseReminder(cleanMarkdownTaskLine(line));
     if (!parsed.dueAt || parsed.dueAt <= Date.now()) {
-      new Notice("Task added. Add a date or time to show it as a reminder.");
+      new Notice(getTaskReminderTimeMissingNotice());
       return;
     }
 
@@ -957,7 +1065,7 @@ export default class QuickReminderPlugin extends Plugin {
     }
 
     await saveScheduledReminder(this.store, this.scheduler, reminder);
-    new Notice(`Task reminder added: ${reminder.text}`);
+    new Notice(getTaskReminderCreatedNotice(reminder.text));
   }
 
   private getActiveMarkdownTaskText(): string {
@@ -974,20 +1082,18 @@ export default class QuickReminderPlugin extends Plugin {
   async revealActiveFileInExplorer(showNotice: boolean): Promise<void> {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
-      if (showNotice) new Notice("No active file to reveal.");
+      if (showNotice) new Notice(getFileRevealMissingActiveFileNotice());
       return;
     }
 
     const revealed = await revealFileInExplorer(this.app, file);
     if (revealed) {
-      if (showNotice) new Notice("Revealed active file");
+      if (showNotice) new Notice(getFileRevealSuccessNotice());
       return;
     }
 
     if (showNotice) {
-      new Notice(
-        "Could not reveal file. Make sure the Files core plugin is enabled.",
-      );
+      new Notice(getFileRevealFailedNotice());
     }
   }
 }
@@ -1212,7 +1318,7 @@ function openCommunityPlugins(app: App): void {
 function insertTaskSections(editor: Editor, headings: string[]): void {
   const current = editor.getValue();
   if (hasTaskSection(current)) {
-    new Notice("This note already has a Tasks section.");
+    new Notice(getTaskSectionsAlreadyPresentNotice());
     return;
   }
 
@@ -1220,7 +1326,7 @@ function insertTaskSections(editor: Editor, headings: string[]): void {
   const cursor = editor.getCursor();
   const prefix = current.trim().length > 0 ? "\n\n" : "";
   editor.replaceRange(`${prefix}${block}`, cursor);
-  new Notice("Task sections inserted.");
+  new Notice(getTaskSectionsInsertedNotice());
 }
 
 function buildTaskSectionBlock(headings: string[]): string {
@@ -1465,7 +1571,7 @@ class QuickReminderSettingTab extends PluginSettingTab {
         button.setButtonText("Insert now").onClick(() => {
           const view = this.app.workspace.getActiveViewOfType(MarkdownView);
           if (!view) {
-            new Notice("Open a markdown note first.");
+            new Notice(getTaskSectionsMissingNoteNotice());
             return;
           }
           insertTaskSections(
@@ -1507,7 +1613,7 @@ class QuickReminderSettingTab extends PluginSettingTab {
           .setButtonText("Create/open starter board")
           .setCta()
           .onClick(() => {
-            void this.plugin.createOrOpenStarterBoard();
+            void this.plugin.startWithTemplateDashboard();
           }),
       );
 

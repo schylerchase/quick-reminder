@@ -1,6 +1,10 @@
 import { Notice, Platform, Plugin } from "obsidian";
 import { Reminder } from "./types";
 import { ReminderStore } from "./store";
+import {
+  getReminderFallbackNotice,
+  getReminderMissedCatchupNotice,
+} from "./lib/reminderMessages";
 
 type FireCallback = (reminder: Reminder) => void | Promise<void>;
 const MAX_TIMEOUT_MS = 2_147_483_000;
@@ -76,7 +80,7 @@ export class Scheduler {
     // overdue reminder notified in ONE persist call. Avoids N sequential
     // vault.process writes to the mirror file on launch, which used to
     // block the UI for several seconds on cloud-synced vaults.
-    new Notice(`${overdue.length} reminders were missed. Showing now.`, 5000);
+    new Notice(getReminderMissedCatchupNotice(overdue.length), 5000);
     const fired: string[] = [];
     for (const reminder of overdue) {
       try {
@@ -178,5 +182,5 @@ function showNativeNotification(reminder: Reminder, silent: boolean): void {
 }
 
 function showFallbackNotice(reminder: Reminder): void {
-  new Notice(`Reminder: ${reminder.text}`, 10_000);
+  new Notice(getReminderFallbackNotice(reminder.text), 10_000);
 }

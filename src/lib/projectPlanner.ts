@@ -114,13 +114,19 @@ export function renderProjectPlanMarkdown(plan: ProjectPlan): string {
 
 export function normalizeProjectFilePath(rawPath: string, title: string): string {
   const fallback = sanitizeProjectTitleForPath(title);
-  const source = rawPath.trim() || fallback;
+  const trimmedPath = rawPath.trim();
+  const isFolderTarget = /[\\/]$/.test(trimmedPath);
+  const source = trimmedPath || fallback;
   if (!source) return "";
 
   const normalized = source
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
+    .replace(/\/$/g, "")
     .trim();
+  if (isFolderTarget && fallback) {
+    return `${normalized}/${fallback}.md`;
+  }
   return /\.md$/i.test(normalized) ? normalized : `${normalized}.md`;
 }
 

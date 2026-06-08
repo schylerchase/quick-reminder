@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder Scoped Empty QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .qa-phone {
+        width: 100%;
+        max-width: 430px;
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body class="theme-dark is-mobile is-phone">
+    <main class="qa-phone qr-view qr-view-dashboard qr-mobile-compact-tasks" data-qa="fixture-root">
+      <section class="qr-view-section" data-qa="scoped-empty-section" aria-label="Vault tasks">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span>Vault tasks</span></span>
+          <span class="qr-view-section-count">0/0</span>
+        </div>
+        <div class="qr-view-empty qr-view-empty-action">
+          <span>No tasks in this note.</span>
+          <button class="qr-row-btn" type="button">Show whole vault</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

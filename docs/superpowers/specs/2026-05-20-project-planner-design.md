@@ -4,7 +4,7 @@
 
 Approved direction: hybrid bulk outline plus editable preview.
 
-Implementation status: first slice is built in Quick Reminder. The planner opens from `New`, writes a new Markdown note, opens the note, refreshes the dashboard, and blocks existing target notes.
+Implementation status: built in Quick Reminder. The planner opens from `New`, writes a new Markdown note, opens the note, refreshes the dashboard, and protects existing target notes from overwrite.
 
 This feature adds a Project Planner module to Quick Reminder so a user can create a whole project note in one pass instead of creating categories and tasks one click at a time.
 
@@ -26,7 +26,7 @@ The planner opens a modal with:
 - `Copy markdown`
 - `Create project note`
 
-The preview is editable in the first implementation. Phase names and task text use compact text inputs, and task notes or subtasks use small textareas. Dates remain part of task text, with detected date chips shown beside the task so the user can see what Quick Reminder will recognize.
+The preview is editable. Phase names and task text use compact text inputs, and task notes or subtasks use small textareas. Dates remain part of task text, with detected date chips shown beside the task so the user can see what Quick Reminder will recognize.
 
 ## Input Format
 
@@ -127,13 +127,13 @@ interface ProjectTask {
 }
 ```
 
-The first slice renders `todo`, `/`, and `x` statuses when the outline contains checkbox syntax.
+The planner renders `todo`, `/`, and `x` statuses when the outline contains checkbox syntax.
 
 ## Error Handling
 
 - Empty project title: keep the save button disabled and show a short inline validation message.
 - Empty target note: derive one from the project title.
-- Existing note: block save in the first slice with a clear message. Appending to existing notes can be added later with an explicit confirmation flow.
+- Existing note: block save with a clear message so Project Planner never overwrites or appends to a note without an explicit new target path.
 - Parent folders missing: create them before writing the note.
 - Parser ambiguity: keep the original outline visible so the user can fix it before saving.
 

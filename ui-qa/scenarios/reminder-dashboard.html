@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder Dashboard Reminder QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        box-sizing: border-box;
+        min-height: 100vh;
+        padding: 10px;
+      }
+
+      .qa-dashboard-shell {
+        width: min(100%, 720px);
+        margin: 0 auto;
+      }
+
+      .qa-live-pane .qr-view-dashboard .qr-view-row {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        align-items: center !important;
+      }
+
+      .qa-live-pane .qr-view-dashboard .qr-view-row-actions {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(18em, 1fr)) !important;
+        width: 100% !important;
+      }
+
+      html body.qa-live-pane .qr-view.qr-view-dashboard .qr-view-section > .qr-view-row:not(.qr-scraped-row) > .qr-view-row-body {
+        inline-size: min-content !important;
+        max-inline-size: min-content !important;
+        min-inline-size: min-content !important;
+        width: min-content !important;
+      }
+    </style>
+  </head>
+  <body class="theme-dark qa-live-pane">
+    <main class="qa-dashboard-shell qr-view qr-view-dashboard" data-qa="fixture-root">
+      <section class="qr-view-section" aria-label="Upcoming reminders">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span>Upcoming</span></span>
+          <span class="qr-view-section-count">1</span>
+        </div>
+
+        <article class="qr-view-row qr-reminder-row" data-qa="upcoming-reminder-row">
+          <div class="qr-reminder-layout">
+            <div class="qr-view-row-body" data-qa="upcoming-reminder-body">
+              <div class="qr-view-row-text">Codex disposable lifecycle reminder</div>
+              <div class="qr-view-row-when">in 1d - Tue, Jun 9, 9:00 AM</div>
+            </div>
+            <div class="qr-view-row-actions" data-qa="upcoming-reminder-actions">
+              <button class="qr-row-btn qr-done-btn" type="button">Done</button>
+              <button class="qr-row-btn" type="button" aria-label="Snooze 10 minutes">Snooze 10m</button>
+              <button class="qr-row-btn" type="button">Edit</button>
+              <button class="qr-row-btn qr-view-del" type="button">Delete</button>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

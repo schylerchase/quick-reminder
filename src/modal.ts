@@ -1,8 +1,25 @@
-import { App, Modal, Notice, Setting } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 import { parseReminder } from "./parser";
 import { Reminder } from "./types";
 import { ReminderStore } from "./store";
 import { Scheduler } from "./scheduler";
+import {
+  getReminderManagerActionLabels,
+  getReminderManagerSections,
+} from "./lib/reminderManager";
+import {
+  getReminderActionFailedNotice,
+  getReminderActionRefreshFailedNotice,
+  getReminderCreatedNotice,
+  getReminderEditInvalidNotice,
+  getReminderPastTimeNotice,
+  getReminderSaveFailedNotice,
+  getReminderTextMissingNotice,
+  getReminderTimeMissingNotice,
+  getTaskReminderDuplicateNotice,
+} from "./lib/reminderMessages";
+import { runReminderActionWorkflow } from "./lib/reminderActionWorkflow";
+import { runExistingTaskReminderWorkflow } from "./lib/taskReminderWorkflow";
 import { saveScheduledReminder } from "./reminderTransaction";
 
 export class QuickCaptureModal extends Modal {
@@ -21,6 +38,7 @@ export class QuickCaptureModal extends Modal {
     private sourceTaskId: string | null = null,
     private onSaveReminder: ((reminder: Reminder, rawInput: string) => void | Promise<void>) | null = null,
     private selectInitialInput = true,
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -91,6 +109,7 @@ export class QuickCaptureModal extends Modal {
   onClose(): void {
     this.isClosed = true;
     this.contentEl.empty();
+    this.onClosed();
   }
 
   private renderPreview(): void {
@@ -154,15 +173,15 @@ export class QuickCaptureModal extends Modal {
     const { text, dueAt } = this.currentParse;
 
     if (!text) {
-      new Notice("Need a task description.");
+      new Notice(getReminderTextMissingNotice());
       return;
     }
     if (!dueAt) {
-      new Notice("No time detected. Try 'tomorrow 3pm' or 'in 10 minutes'.");
+      new Notice(getReminderTimeMissingNotice());
       return;
     }
     if (dueAt <= Date.now()) {
-      new Notice("That time is in the past.");
+      new Notice(getReminderPastTimeNotice());
       return;
     }
 
@@ -185,19 +204,32 @@ export class QuickCaptureModal extends Modal {
     }
 
     try {
-      await saveScheduledReminder(
-        this.store,
-        this.scheduler,
-        reminder,
-        () => this.onSaveReminder?.(reminder, rawInput),
-        (rollbackErr) => console.error("Quick Reminder rollback failed", rollbackErr),
-      );
-      new Notice(`Reminder set: ${text} - ${formatDateTime(dueAt)}`);
-      this.close();
-    } catch (err) {
-      console.error("Quick Reminder save failed", err);
-      new Notice("Quick Reminder: could not save reminder - see console");
-      if (this.saveButtonEl) this.saveButtonEl.disabled = false;
+      const result = await runExistingTaskReminderWorkflow({
+        hasExistingReminder: this.sourceTaskId
+          ? () => this.store.hasPendingReminderForSourceTask(this.sourceTaskId!)
+          : undefined,
+        saveReminder: () =>
+          saveScheduledReminder(
+            this.store,
+            this.scheduler,
+            reminder,
+            () => this.onSaveReminder?.(reminder, rawInput),
+            (rollbackErr) => console.error("Quick Reminder rollback failed", rollbackErr),
+          ),
+        afterSave: async () => {},
+        onDuplicate: () => new Notice(getTaskReminderDuplicateNotice()),
+        onSaveError: (err) => console.error("Quick Reminder save failed", err),
+      });
+
+      if (result.ok) {
+        new Notice(getReminderCreatedNotice(text, formatDateTime(dueAt)));
+        this.close();
+      } else if ("duplicate" in result) {
+        if (this.saveButtonEl) this.saveButtonEl.disabled = false;
+      } else if (!result.reminderSaved) {
+        new Notice(getReminderSaveFailedNotice());
+        if (this.saveButtonEl) this.saveButtonEl.disabled = false;
+      }
     } finally {
       this.isSaving = false;
     }
@@ -205,10 +237,16 @@ export class QuickCaptureModal extends Modal {
 }
 
 export class ReminderListModal extends Modal {
+  private editingId: string | null = null;
+
   constructor(
     app: App,
     private store: ReminderStore,
     private scheduler: Scheduler,
+    private openCapture: (text?: string) => void = (text = "") => {
+      new QuickCaptureModal(this.app, this.store, this.scheduler, text).open();
+    },
+    private onClosed: () => void = () => {},
   ) {
     super(app);
   }
@@ -216,50 +254,303 @@ export class ReminderListModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
+    contentEl.addClass("qr-modal");
     contentEl.addClass("qr-list-modal");
 
-    contentEl.createEl("h2", { text: "Pending reminders" });
+    const header = contentEl.createDiv({ cls: "qr-modal-header" });
+    header.createEl("h2", { text: "Reminders" });
 
-    const pending = this.store.pending;
-    if (pending.length === 0) {
-      contentEl.createEl("p", { text: "No pending reminders.", cls: "qr-preview-muted" });
+    const sections = getReminderManagerSections(this.store.all);
+    const hasReminders = sections.some((section) => section.reminders.length > 0);
+    if (!hasReminders) {
+      contentEl.createEl("p", {
+        text: "No reminders yet.",
+        cls: "qr-preview-muted",
+      });
+      const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
+      actions.createEl("button", {
+        text: "New reminder",
+        cls: "qr-primary-btn",
+      }).onclick = () => {
+        this.close();
+        this.openCapture();
+      };
       return;
     }
 
-    for (const r of pending) {
-      const row = contentEl.createDiv({ cls: "qr-list-row" });
-      const text = row.createDiv({ cls: "qr-list-text" });
-      text.createDiv({ text: r.text, cls: "qr-list-title" });
-      text.createDiv({
-        text: new Date(r.dueAt).toLocaleString(),
-        cls: "qr-list-when",
-      });
-
-      new Setting(row)
-        .addButton((b) =>
-          b
-            .setButtonText(`Snooze ${this.store.settings.defaultSnoozeMinutes}m`)
-            .onClick(async () => {
-              await this.store.snooze(r.id, this.store.settings.defaultSnoozeMinutes);
-              this.scheduler.scheduleAll();
-              this.onOpen();
-            }),
-        )
-        .addButton((b) =>
-          b
-            .setButtonText("Delete")
-            .setWarning()
-            .onClick(async () => {
-              this.scheduler.cancel(r.id);
-              await this.store.remove(r.id);
-              this.onOpen();
-            }),
-        );
+    for (const section of sections) {
+      this.renderSection(contentEl, section);
     }
   }
 
   onClose(): void {
+    this.editingId = null;
     this.contentEl.empty();
+    this.onClosed();
+  }
+
+  private renderSection(
+    parent: HTMLElement,
+    section: ReturnType<typeof getReminderManagerSections>[number],
+  ): void {
+    const wrapper = parent.createDiv({ cls: "qr-list-section" });
+    const head = wrapper.createDiv({ cls: "qr-list-section-head" });
+    head.createEl("h3", { text: section.title });
+    head.createSpan({
+      text: String(section.reminders.length),
+      cls: "qr-list-count",
+    });
+
+    if (section.reminders.length === 0) {
+      wrapper.createDiv({
+        text: section.emptyText,
+        cls: "qr-preview-muted qr-list-empty",
+      });
+      return;
+    }
+
+    for (const reminder of section.reminders) {
+      this.renderReminderRow(wrapper, reminder, section.isHistory);
+    }
+  }
+
+  private renderReminderRow(
+    parent: HTMLElement,
+    reminder: Reminder,
+    isHistory: boolean,
+  ): void {
+    const row = parent.createDiv({ cls: "qr-list-row" });
+    row.toggleClass("qr-list-row-history", isHistory);
+
+    if (this.editingId === reminder.id && !isHistory) {
+      this.renderEditRow(row, reminder);
+      return;
+    }
+
+    const text = row.createDiv({ cls: "qr-list-text" });
+    text.createDiv({ text: reminder.text, cls: "qr-list-title" });
+    text.createDiv({
+      text: formatManagerWhen(reminder, isHistory),
+      cls: "qr-list-when",
+    });
+
+    const actions = row.createDiv({ cls: "qr-list-actions qr-view-row-actions" });
+    for (const label of getReminderManagerActionLabels(
+      isHistory,
+      this.store.settings.defaultSnoozeMinutes,
+    )) {
+      this.renderAction(actions, reminder, label);
+    }
+  }
+
+  private renderAction(
+    parent: HTMLElement,
+    reminder: Reminder,
+    label: string,
+  ): void {
+    const button = parent.createEl("button", {
+      text: label,
+      cls: label === "Delete" ? "qr-row-btn qr-view-del" : "qr-row-btn",
+    });
+    button.setAttr("aria-label", `${label} reminder`);
+
+    if (label === "Done") {
+      this.wireActionButton(button, {
+        busyText: "Saving...",
+        description: "mark this reminder done",
+        successMessage: "Reminder marked done",
+        action: async () => {
+          this.scheduler.cancel(reminder.id);
+          await this.store.complete(reminder.id);
+        },
+      });
+      return;
+    }
+
+    if (label.startsWith("Snooze")) {
+      const minutes = this.store.settings.defaultSnoozeMinutes;
+      this.wireActionButton(button, {
+        busyText: "Snoozing...",
+        description: "snooze this reminder",
+        successMessage: `Snoozed ${minutes}m`,
+        action: async () => {
+          await this.store.snooze(reminder.id, minutes);
+          this.scheduler.scheduleAll();
+        },
+      });
+      return;
+    }
+
+    if (label === "Edit") {
+      button.onclick = () => {
+        this.editingId = reminder.id;
+        this.onOpen();
+      };
+      return;
+    }
+
+    if (label === "Restore") {
+      this.wireActionButton(button, {
+        busyText: "Restoring...",
+        description: "restore this reminder",
+        successMessage: "Reminder restored",
+        action: async () => {
+          await this.store.restore(reminder.id);
+          this.scheduler.scheduleAll();
+        },
+      });
+      return;
+    }
+
+    if (label === "Re-add") {
+      button.onclick = () => {
+        this.close();
+        this.openCapture(reminder.text);
+      };
+      return;
+    }
+
+    this.wireActionButton(button, {
+      busyText: "Deleting...",
+      description: "delete this reminder",
+      successMessage: "Reminder deleted",
+      action: async () => {
+        this.scheduler.cancel(reminder.id);
+        await this.store.remove(reminder.id);
+      },
+    });
+  }
+
+  private renderEditRow(parent: HTMLElement, reminder: Reminder): void {
+    const editor = parent.createDiv({ cls: "qr-edit-form qr-list-edit-form" });
+    const fields = editor.createDiv({ cls: "qr-edit-fields" });
+    const textInput = fields.createEl("input", { type: "text", cls: "qr-edit-input" });
+    textInput.value = reminder.text;
+
+    const dueInput = fields.createEl("input", {
+      type: "datetime-local",
+      cls: "qr-edit-input",
+    });
+    dueInput.value = formatInputDate(reminder.dueAt);
+
+    const actions = editor.createDiv({ cls: "qr-edit-actions" });
+    actions.createEl("button", { text: "Cancel", cls: "qr-row-btn" }).onclick = () => {
+      this.editingId = null;
+      this.onOpen();
+    };
+    const saveBtn = actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" });
+    let isRunning = false;
+    const idleText = saveBtn.textContent ?? "";
+    saveBtn.onclick = () => {
+      void this.saveEdit(
+        reminder,
+        textInput.value,
+        dueInput.value,
+        {
+          isRunning: () => isRunning,
+          setRunning: (running) => {
+            isRunning = running;
+            saveBtn.disabled = running;
+            saveBtn.setText(running ? "Saving..." : idleText);
+          },
+        },
+      );
+    };
+
+    window.setTimeout(() => textInput.focus(), 0);
+  }
+
+  private async saveEdit(
+    reminder: Reminder,
+    textValue: string,
+    dueValue: string,
+    runningState: {
+      isRunning: () => boolean;
+      setRunning: (running: boolean) => void;
+    },
+  ): Promise<void> {
+    const text = textValue.trim();
+    const dueAt = new Date(dueValue).getTime();
+    if (!text || Number.isNaN(dueAt)) {
+      new Notice(getReminderEditInvalidNotice());
+      return;
+    }
+    if (dueAt <= Date.now()) {
+      new Notice(getReminderPastTimeNotice());
+      return;
+    }
+
+    await this.runAction(
+      "update this reminder",
+      "Reminder updated",
+      async () => {
+        await this.store.updateReminder(reminder.id, text, dueAt);
+        this.scheduler.scheduleAll();
+        this.editingId = null;
+      },
+      runningState,
+    );
+  }
+
+  private wireActionButton(
+    button: HTMLButtonElement,
+    options: {
+      busyText: string;
+      description: string;
+      successMessage: string;
+      action: () => Promise<void>;
+    },
+  ): void {
+    const idleText = button.textContent ?? "";
+    let isRunning = false;
+    button.onclick = () => {
+      void this.runAction(
+        options.description,
+        options.successMessage,
+        options.action,
+        {
+          isRunning: () => isRunning,
+          setRunning: (running) => {
+            isRunning = running;
+            button.disabled = running;
+            button.setText(running ? options.busyText : idleText);
+          },
+        },
+      );
+    };
+  }
+
+  private async runAction(
+    description: string,
+    successMessage: string,
+    action: () => Promise<void>,
+    runningState?: {
+      isRunning: () => boolean;
+      setRunning: (running: boolean) => void;
+    },
+  ): Promise<void> {
+    const result = await runReminderActionWorkflow({
+      isRunning: runningState?.isRunning,
+      setRunning: runningState?.setRunning,
+      run: action,
+      refresh: () => this.onOpen(),
+      onError: (error) =>
+        console.error("Quick Reminder reminder manager action failed", error),
+      onRefreshError: (error) =>
+        console.error("Quick Reminder reminder manager refresh failed", error),
+    });
+
+    if (!result.ok) {
+      if ("ignored" in result) return;
+      new Notice(
+        result.actionCompleted
+          ? getReminderActionRefreshFailedNotice()
+          : getReminderActionFailedNotice(description),
+      );
+      return;
+    }
+
+    new Notice(successMessage);
   }
 }
 
@@ -275,4 +566,21 @@ function formatDateTime(ms: number): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function formatManagerWhen(reminder: Reminder, isHistory: boolean): string {
+  if (!isHistory) return formatDateTime(reminder.dueAt);
+
+  const finishedAt = reminder.completedAt ?? reminder.notifiedAt;
+  if (!finishedAt) return `Due ${formatDateTime(reminder.dueAt)}`;
+
+  return `Finished ${formatDateTime(finishedAt)} - due ${formatDateTime(reminder.dueAt)}`;
+}
+
+function formatInputDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
 }

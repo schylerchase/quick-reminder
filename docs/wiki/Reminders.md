@@ -19,13 +19,19 @@ meeting next Tuesday at 10am
 4. The scheduler fires while Obsidian is open.
 5. Missed reminders are caught on next launch if that setting is enabled.
 
+From the manager or dashboard, pending reminders can be marked done, snoozed, edited, or deleted. Completed and notified reminders can be restored, re-added, or deleted.
+
+Use **Quick Reminder: Open reminders modal** for a compact modal list, or click the ribbon checklist icon / **Quick Reminder: Open reminder manager** for the sidebar manager.
+
 ## Notifications
 
 On desktop, Quick Reminder uses browser/OS notifications when available. On mobile and unsupported environments, it falls back to Obsidian notices.
 
 ## Task-backed reminders
 
-If a Markdown task contains a future date phrase, the dashboard can attach a reminder to that source task. This helps avoid duplicate reminders for the same task.
+The editor context menu also offers **Add task reminder** from the current task line. If Tasks plugin integration is unavailable, Quick Reminder falls back to its own capture modal.
+
+If a Markdown task contains a future date phrase, the dashboard can attach a reminder to that source task. The task card shows **Reminder set** after the link exists, which helps avoid duplicate reminders for the same task.
 
 ## Markdown mirror
 
