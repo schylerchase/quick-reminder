@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DELIMITER_START,
   DELIMITER_END,
+  detectNewline,
   findManagedBlock,
   insertEmptyManagedBlock,
   removeManagedBlock,
@@ -215,6 +216,69 @@ test("renderGroupsToMarkdown emits headings only when non-inbox", () => {
   // Inbox group should not write "## Inbox" header to avoid polluting source
   assert.equal(md.includes("## Inbox"), false);
   assert.match(md, /- \[ \] x/);
+});
+
+// --- F17: line-ending preservation (no whole-file LF rewrite on CRLF notes) ---
+
+test("detectNewline reports CRLF only when present, else LF", () => {
+  assert.equal(detectNewline("a\r\nb"), "\r\n");
+  assert.equal(detectNewline("a\nb"), "\n");
+  assert.equal(detectNewline(""), "\n");
+});
+
+test("insertEmptyManagedBlock preserves CRLF byte-for-byte", () => {
+  const content = "# Note\r\n\r\nbody\r\n";
+  const result = insertEmptyManagedBlock(content);
+  // Full-document equality: proves the file is not rewritten to LF and that
+  // exactly the delimiters (no extra/dropped lines) are appended.
+  assert.equal(
+    result,
+    `# Note\r\n\r\nbody\r\n\r\n${DELIMITER_START}\r\n${DELIMITER_END}\r\n`,
+  );
+});
+
+test("insertEmptyManagedBlock keeps LF input all-LF", () => {
+  const content = "# Note\n\nbody\n";
+  const result = insertEmptyManagedBlock(content);
+  assert.equal(result.includes("\r\n"), false);
+  assert.match(result, new RegExp(`${escapeRe(DELIMITER_START)}\\n`));
+});
+
+test("removeManagedBlock preserves CRLF on the surviving lines", () => {
+  const content = [
+    "# Note",
+    "",
+    DELIMITER_START,
+    "## Phase",
+    "- [ ] task",
+    DELIMITER_END,
+    "tail",
+    "",
+  ].join("\r\n");
+  const result = removeManagedBlock(content);
+  assert.equal(/[^\r]\n/.test(result), false); // no lone LF
+  assert.match(result, /# Note/);
+  assert.match(result, /tail/);
+  assert.equal(result.includes(DELIMITER_START), false);
+});
+
+test("replaceManagedBlockContent round-trips a CRLF document to CRLF", () => {
+  const content = ["# Note", DELIMITER_START, "old", DELIMITER_END, ""].join(
+    "\r\n",
+  );
+  const result = replaceManagedBlockContent(content, "## New\n- [ ] x");
+  assert.equal(/[^\r]\n/.test(result), false); // every newline is CRLF
+  assert.match(result, /## New\r\n- \[ \] x/);
+  assert.equal(result.includes("old"), false);
+});
+
+test("replaceManagedBlockContent keeps an LF document all-LF", () => {
+  const content = ["# Note", DELIMITER_START, "old", DELIMITER_END, ""].join(
+    "\n",
+  );
+  const result = replaceManagedBlockContent(content, "## New\n- [ ] x");
+  assert.equal(result.includes("\r\n"), false);
+  assert.match(result, /## New\n- \[ \] x/);
 });
 
 function escapeRe(s: string): string {

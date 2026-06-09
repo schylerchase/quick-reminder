@@ -11,6 +11,18 @@ test("parseReminder extracts relative due time and task text", () => {
   assert.equal(new Date(result.dueAt ?? 0).toISOString(), "2026-01-15T19:00:00.000Z");
 });
 
+test("parseReminder returns empty result for empty/whitespace input", () => {
+  assert.deepEqual(parseReminder(""), { text: "", dueAt: null, matchedText: null });
+  assert.deepEqual(parseReminder("   "), { text: "", dueAt: null, matchedText: null });
+});
+
+test("parseReminder returns null due time when no date phrase is present", () => {
+  const result = parseReminder("buy milk");
+  assert.equal(result.text, "buy milk");
+  assert.equal(result.dueAt, null);
+  assert.equal(result.matchedText, null);
+});
+
 test("parseReminder preserves words ending in connector tokens (Marvin, begin, Burton)", () => {
   const ref = new Date("2026-01-15T12:00:00-05:00");
   // Previously the trailing-connector regex chewed "in" off "Marvin",

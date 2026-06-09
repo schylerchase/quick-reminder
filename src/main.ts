@@ -175,6 +175,14 @@ export default class QuickReminderPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    this.registerReminderView();
+    await this.buildCoreServices();
+    this.deferRibbonSetup();
+    this.registerCommands();
+    this.registerWorkspaceHooks();
+  }
+
+  private registerReminderView(): void {
     // Register view FIRST — before any await — so Obsidian's workspace
     // restore can place leaves at their saved sidebar positions. Registering
     // after `await store.init()` lets layout restore beat the registration:
@@ -196,7 +204,9 @@ export default class QuickReminderPlugin extends Plugin {
           () => this.startWithTemplateDashboard(),
         ),
     );
+  }
 
+  private async buildCoreServices(): Promise<void> {
     this.store = new ReminderStore(
       this.app,
       async () => (await this.loadData()) as PluginData | null,
@@ -209,6 +219,9 @@ export default class QuickReminderPlugin extends Plugin {
     this.scheduler = new Scheduler(this.store, async (reminder) => {
       await this.store.markNotified(reminder.id);
     }, this);
+  }
+
+  private deferRibbonSetup(): void {
     // Defer ribbon icon registration to layoutReady. Adding to the ribbon
     // synchronously during onload triggers a workspace re-layout on iPad
     // which dismisses any open settings modal (the "instant close menu"
@@ -223,7 +236,9 @@ export default class QuickReminderPlugin extends Plugin {
       this.restoreRibbonPosition(ribbonIcon);
       this.trackRibbonPosition(ribbonIcon);
     });
+  }
 
+  private registerCommands(): void {
     this.addCommand({
       id: "quick-capture",
       name: "Quick capture reminder",
@@ -319,7 +334,9 @@ export default class QuickReminderPlugin extends Plugin {
         void this.applyManagedBlockTransform(file, regenerateManagedBlock);
       },
     });
+  }
 
+  private registerWorkspaceHooks(): void {
     // NOTE: auto-regenerate on file modify is intentionally disabled.
     // The managed block is canonical when users edit tasks inside it; an
     // unconditional regen would clobber those edits with above-block content.
@@ -1373,8 +1390,6 @@ class QuickReminderSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Quick Reminder Settings" });
-
     new Setting(containerEl)
       .setName("Mirror to markdown")
       .setDesc(
@@ -1470,7 +1485,7 @@ class QuickReminderSettingTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: "Task sections" });
+    new Setting(containerEl).setName("Task sections").setHeading();
 
     new Setting(containerEl)
       .setName("Task section headings")
@@ -1581,7 +1596,7 @@ class QuickReminderSettingTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: "Starter dashboard" });
+    new Setting(containerEl).setName("Starter dashboard").setHeading();
 
     new Setting(containerEl)
       .setName("Starter board path")

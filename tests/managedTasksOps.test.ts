@@ -185,6 +185,62 @@ test("CONTENT_REGION enum exposes labels", () => {
   assert.equal(CONTENT_REGION.NoBlock, "no-block");
 });
 
+// --- F17: managed-block ops must not rewrite CRLF notes to LF ---
+
+const hasLoneLf = (s: string): boolean => /[^\r]\n/.test(s);
+
+test("regenerateManagedBlock round-trips a CRLF document byte-for-byte", () => {
+  const pre = "# Title\r\n\r\n## Roadmap\r\n- [ ] ship it\r\n- [x] design";
+  const content = `${pre}\r\n${DELIMITER_START}\r\n${DELIMITER_END}\r\n`;
+  const result = regenerateManagedBlock(content);
+  // Full-document equality: the mirror is rebuilt with CRLF throughout and the
+  // above-block source is untouched — no whole-file LF rewrite, no churn.
+  const mirror = "## Roadmap\r\n- [ ] ship it\r\n- [x] design";
+  assert.equal(
+    result,
+    `${pre}\r\n${DELIMITER_START}\r\n${mirror}\r\n${DELIMITER_END}\r\n`,
+  );
+});
+
+test("regenerateManagedBlock keeps an LF document all-LF", () => {
+  const pre = "# Title\n\n## Roadmap\n- [ ] ship it";
+  const content = `${pre}\n${DELIMITER_START}\n${DELIMITER_END}\n`;
+  const result = regenerateManagedBlock(content);
+  assert.equal(result.includes("\r\n"), false);
+  assert.match(result, /## Roadmap\n- \[ \] ship it/);
+});
+
+test("insertManagedBlockIfNeeded preserves CRLF when auto-inserting the block", () => {
+  const content = "# Title\r\n\r\n## Phase\r\n- [ ] task\r\n";
+  const result = insertManagedBlockIfNeeded(content);
+  assert.notEqual(result, content); // block was inserted
+  assert.equal(hasLoneLf(result), false); // and the file stayed CRLF
+  assert.match(result, new RegExp(`${escapeRe(DELIMITER_START)}\\r\\n`));
+});
+
+test("addTaskUnderHeading preserves CRLF end to end", () => {
+  const pre = "## Phase\r\n- [ ] existing";
+  const content = `${pre}\r\n${DELIMITER_START}\r\n${DELIMITER_END}\r\n`;
+  const result = addTaskUnderHeading(content, "Phase", "fresh task");
+  assert.equal(hasLoneLf(result), false);
+  assert.match(result, /- \[ \] fresh task/);
+});
+
+test("setCheckboxStatusOnLine preserves CRLF", () => {
+  const content = ["## Phase", "- [ ] todo one", "- [x] done one"].join("\r\n");
+  const result = setCheckboxStatusOnLine(content, 1, "x");
+  assert.equal(hasLoneLf(result), false);
+  const lines = result.split("\r\n");
+  assert.equal(lines[1], "- [x] todo one");
+});
+
+test("renameHeadingInContent preserves CRLF in the no-block branch", () => {
+  const content = "## Old Name\r\n- [ ] task";
+  const result = renameHeadingInContent(content, "Old Name", "New Name");
+  assert.equal(hasLoneLf(result), false);
+  assert.match(result, /## New Name/);
+});
+
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

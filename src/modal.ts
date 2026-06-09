@@ -21,6 +21,7 @@ import {
 import { runReminderActionWorkflow } from "./lib/reminderActionWorkflow";
 import { runExistingTaskReminderWorkflow } from "./lib/taskReminderWorkflow";
 import { saveScheduledReminder } from "./reminderTransaction";
+import { formatInputDate } from "./lib/dateFormat";
 
 export class QuickCaptureModal extends Modal {
   private inputEl!: HTMLInputElement;
@@ -575,12 +576,4 @@ function formatManagerWhen(reminder: Reminder, isHistory: boolean): string {
   if (!finishedAt) return `Due ${formatDateTime(reminder.dueAt)}`;
 
   return `Finished ${formatDateTime(finishedAt)} - due ${formatDateTime(reminder.dueAt)}`;
-}
-
-function formatInputDate(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
 }

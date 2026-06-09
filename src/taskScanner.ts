@@ -34,7 +34,12 @@ export class TaskScanner {
       .sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line);
   }
 
-  private async scanFile(file: TFile): Promise<ScrapedTask[]> {
+  /**
+   * Scan a single file. Public so the view's incremental refresh (F06) can
+   * re-scan only the changed file and splice its tasks into the cached list,
+   * instead of re-parsing every markdown file in the vault on each edit.
+   */
+  async scanFile(file: TFile): Promise<ScrapedTask[]> {
     const content = await this.app.vault.cachedRead(file);
     const lines = content.split(/\r?\n/);
     const tasks: ScrapedTask[] = [];
@@ -85,9 +90,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line || !CHECKBOX_TASK_RE.test(line)) return content;
 
       const context = collectTaskContextNotes(lines, index);
       const block = lines.slice(index, context.lastIndex + 1);
@@ -133,9 +138,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line) return content;
       const match = line.match(CHECKBOX_TASK_RE);
       if (!match?.groups) return content;
       const prefix = line.slice(0, line.indexOf(`[${match.groups.status}]`));
@@ -180,8 +185,23 @@ export class TaskScanner {
       }> = [];
       let currentSection = "";
       let inCodeFence = false;
+      let inManagedBlock = false;
 
       for (let index = tasksHeading + 1; index < endIndex; index += 1) {
+        // F18: skip the qr:tasks managed (mirror) block. Its indent-0 mirror
+        // checkboxes match the task filter below, so without tracking the
+        // delimiter comments this loop would splice mirror lines OUT of the
+        // auto-generated block and into a `###` section — corrupting the
+        // mirror and producing a duplicated/desynced task. Mirrors the
+        // delimiter handling in MarkdownScanState.shouldSkip.
+        if (inManagedBlock) {
+          if (MANAGED_BLOCK_END_RE.test(lines[index])) inManagedBlock = false;
+          continue;
+        }
+        if (MANAGED_BLOCK_START_RE.test(lines[index])) {
+          inManagedBlock = true;
+          continue;
+        }
         // Track fence parity so a code-block example like "- [x] do thing"
         // inside ```...``` is treated as content, not a real task. Without
         // this, the splice below would pull the example out of the fence
@@ -304,9 +324,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line || !isScannableTaskLine(line)) return content;
 
       const context = collectTaskContextNotes(lines, index);
       lines.splice(
@@ -351,9 +371,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line || !isScannableTaskLine(line)) return content;
 
       const context = collectTaskContextNotes(lines, index);
       const noteLines = Array.isArray(noteBlock)
@@ -386,9 +406,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line || !CHECKBOX_TASK_RE.test(line)) return content;
 
       const nextTask = parseCheckboxTask(file, nextLine, task.line, task.category);
       if (!nextTask) return content;
@@ -413,9 +433,9 @@ export class TaskScanner {
     await this.app.vault.process(file, (content) => {
       const newline = content.includes("\r\n") ? "\r\n" : "\n";
       const lines = content.split(/\r?\n/);
-      const index = task.line - 1;
+      const index = resolveTaskLineIndex(file, lines, task);
+      if (index === -1) return content;
       const line = lines[index];
-      if (!line || !isScannableTaskLine(line)) return content;
 
       const context = collectTaskContextNotes(lines, index);
       lines.splice(index, context.lastIndex - index + 1);
@@ -503,6 +523,55 @@ function parseTaskLine(
 
 function isScannableTaskLine(line: string): boolean {
   return CHECKBOX_TASK_RE.test(line) || TODO_MARKER_RE.test(line);
+}
+
+/**
+ * F05: confirm the line at a cached index still belongs to `task`. The cached
+ * `task.line` goes stale whenever a prior dashboard action relocated a task
+ * block (e.g. setCheckboxStatus moves the block under a different `###`
+ * heading), shifting every other task's line number. Comparing the parsed
+ * line's stable id (filePath + kind + identity text — status fields excluded,
+ * so a status change does NOT break identity) is how scanFile recognises the
+ * same task across edits.
+ */
+function taskLineIdentityMatches(
+  file: TFile,
+  line: string | undefined,
+  task: ScrapedTask,
+): boolean {
+  if (!line) return false;
+  const parsed = parseTaskLine(file, line, task.line, task.category);
+  return parsed !== null && parsed.id === task.id;
+}
+
+/**
+ * Resolve the current index of `task` within `lines`, re-verifying identity
+ * before any splice. Returns the cached index when it still matches; otherwise
+ * searches for the UNIQUE line whose identity matches. Returns -1 when zero or
+ * more than one line matches (ambiguous duplicate) — the caller MUST abort the
+ * write rather than mutate or delete the wrong task.
+ */
+function resolveTaskLineIndex(
+  file: TFile,
+  lines: string[],
+  task: ScrapedTask,
+): number {
+  const cached = task.line - 1;
+  if (
+    cached >= 0 &&
+    cached < lines.length &&
+    taskLineIdentityMatches(file, lines[cached], task)
+  ) {
+    return cached;
+  }
+  let found = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (taskLineIdentityMatches(file, lines[index], task)) {
+      if (found !== -1) return -1; // ambiguous: refuse to guess which is meant
+      found = index;
+    }
+  }
+  return found;
 }
 
 function parseCheckboxTask(
@@ -751,8 +820,33 @@ function isSectionManagedCheckboxStatus(
   );
 }
 
+// F21: the field-name regexes below are templated on a fixed set of field
+// names known at module load, but were previously recompiled (new RegExp) on
+// every checkbox line of every file on every scan. Memoize one RegExp per
+// (shape, fieldName) so the scan hot path reuses them.
+const hasFieldReCache = new Map<string, RegExp>();
+const removeFieldReCache = new Map<string, RegExp>();
+const valueFieldReCache = new Map<string, RegExp>();
+
+function memoRe(
+  cache: Map<string, RegExp>,
+  fieldName: string,
+  make: () => RegExp,
+): RegExp {
+  let re = cache.get(fieldName);
+  if (!re) {
+    re = make();
+    cache.set(fieldName, re);
+  }
+  return re;
+}
+
 function hasInlineField(normalizedText: string, fieldName: string): boolean {
-  return new RegExp(`\\[\\s*${fieldName}\\s*::`).test(normalizedText);
+  return memoRe(
+    hasFieldReCache,
+    fieldName,
+    () => new RegExp(`\\[\\s*${fieldName}\\s*::`),
+  ).test(normalizedText);
 }
 
 function getCheckboxStatusMarker(
@@ -790,7 +884,14 @@ function updateStatusMetadata(
 
 function removeInlineField(line: string, fieldName: string): string {
   return line
-    .replace(new RegExp(`\\s*\\[\\s*${fieldName}\\s*::[^\\]]*\\]`, "gi"), "")
+    .replace(
+      memoRe(
+        removeFieldReCache,
+        fieldName,
+        () => new RegExp(`\\s*\\[\\s*${fieldName}\\s*::[^\\]]*\\]`, "gi"),
+      ),
+      "",
+    )
     .trimEnd();
 }
 
@@ -808,26 +909,35 @@ function cleanTaskText(text: string): string {
     .trim();
 }
 
+// F21: precompiled once instead of rebuilt per call (stripStatusFields runs on
+// every checkbox line via cleanTaskText/parseCheckboxTask).
+const STATUS_FIELD_NAMES = [
+  "status",
+  "currentStatus",
+  "inProgress",
+  "completion",
+  "cancelled",
+] as const;
+const STRIP_STATUS_FIELD_RES = STATUS_FIELD_NAMES.map(
+  (fieldName) =>
+    new RegExp("\\s*`?\\[\\s*" + fieldName + "\\s*::[^\\]]*\\]`?", "gi"),
+);
+
 function stripStatusFields(text: string): string {
   let updated = text;
-  for (const fieldName of [
-    "status",
-    "currentStatus",
-    "inProgress",
-    "completion",
-    "cancelled",
-  ]) {
-    updated = updated.replace(
-      new RegExp("\\s*`?\\[\\s*" + fieldName + "\\s*::[^\\]]*\\]`?", "gi"),
-      "",
-    );
+  for (const re of STRIP_STATUS_FIELD_RES) {
+    updated = updated.replace(re, "");
   }
   return updated.trim();
 }
 
 function getInlineFieldValue(text: string, fieldName: string): string | null {
   const match = text.match(
-    new RegExp(`\\[\\s*${fieldName}\\s*::\\s*([^\\]]+)\\]`, "i"),
+    memoRe(
+      valueFieldReCache,
+      fieldName,
+      () => new RegExp(`\\[\\s*${fieldName}\\s*::\\s*([^\\]]+)\\]`, "i"),
+    ),
   );
   return match?.[1]?.replace(/`/g, "").trim() ?? null;
 }

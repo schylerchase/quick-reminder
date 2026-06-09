@@ -45,6 +45,7 @@ import {
 } from "./lib/dashboardState";
 import { runDashboardOpenWorkflow } from "./lib/dashboardOpenWorkflow";
 import { runDashboardScanWorkflow } from "./lib/dashboardScanWorkflow";
+import { formatInputDate } from "./lib/dateFormat";
 import { getStarterBoardOpenFailedNotice } from "./lib/starterBoardMessages";
 import { runStarterBoardEntryAction } from "./lib/starterBoardWorkflow";
 import { filterTasksByQuery, getTaskSearchText } from "./lib/task-search";
@@ -160,24 +161,38 @@ import {
   expandRightSidebar,
   collapseRightSidebar,
 } from "./workspace";
+import {
+  PHASE_PAGE_SIZE,
+  compareTaskPageOrder,
+  formatHistoryWhen,
+  formatWhen,
+  genReminderId,
+  getCurrentFolderScopePath,
+  getEmptyScrapedText,
+  getEmptyText,
+  getPhaseAccentHue,
+  getSummaryText,
+  getTaskContextSummaryText,
+  getTaskKindBadgeText,
+  getTaskPriorityRank,
+  getTaskStatusClassName,
+  getTaskStatusTitle,
+  getTasksPluginApi,
+  groupTasksByPhase,
+  hasFutureDueAt,
+  isInFolder,
+  normalizeContextNoteLines,
+  shouldUseMobileTaskViewport,
+  splitTaskInput,
+  type TaskPhaseGroup,
+} from "./lib/viewHelpers";
+import { IgnoreTaskModal } from "./modals/IgnoreTaskModal";
+import { DeleteTaskModal } from "./modals/DeleteTaskModal";
+import { TaskContextNoteModal } from "./modals/TaskContextNoteModal";
+import { NewItemModal } from "./modals/NewItemModal";
+import { NewTaskModal } from "./modals/NewTaskModal";
 
 export const VIEW_TYPE_REMINDER = "quick-reminder-view";
-
-function shouldUseMobileTaskViewport(): boolean {
-  if (
-    typeof document !== "undefined" &&
-    (
-      document.body.classList.contains("is-mobile") ||
-      document.body.classList.contains("is-phone")
-    )
-  ) {
-    return true;
-  }
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia("(max-width: 480px)").matches;
-}
 
 type ReminderViewState = {
   taskScope: TaskDashboardScope;
@@ -212,6 +227,14 @@ export class ReminderView extends ItemView {
   private taskSort: TaskDashboardSort = "page";
   private fileOpenRef: EventRef | null = null;
   private scanDebounceHandle: number | null = null;
+  /**
+   * Paths accumulated across one debounce window for incremental refresh
+   * (F06). `pendingRescanPaths` are re-read via taskScanner.scanFile and
+   * spliced into the cached task list; `pendingRemovePaths` are deleted files
+   * whose tasks are dropped without a (dead-file) read. Cleared on each fire.
+   */
+  private pendingRescanPaths = new Set<string>();
+  private pendingRemovePaths = new Set<string>();
   /** Per-path in-flight organize promise so callers can await completion. */
   private organizingPromises = new Map<string, Promise<void>>();
   /**
@@ -297,12 +320,19 @@ export class ReminderView extends ItemView {
     });
     this.registerEvent(this.app.vault.on("modify", (file) => this.queueTaskRefreshForFile(file)));
     this.registerEvent(this.app.vault.on("create", (file) => this.queueTaskRefreshForFile(file)));
-    this.registerEvent(this.app.vault.on("delete", (file) => this.queueTaskRefreshForFile(file)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.queueTaskRemoveForFile(file)));
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (this.shouldRefreshForVaultFile(file) || this.isScannedMarkdownPath(oldPath)) {
-          this.queueTaskRefresh();
-        }
+        const newScanned = this.shouldRefreshForVaultFile(file);
+        const oldScanned = this.isScannedMarkdownPath(oldPath);
+        if (!newScanned && !oldScanned) return;
+        // Drop the old path's cached tasks; re-scan the new path so its tasks
+        // re-appear under the renamed file (mirrors a full scan of both).
+        // Keys are the raw file.path strings, matching ScrapedTask.filePath
+        // exactly (taskScanner stores filePath: file.path, unnormalized).
+        if (oldScanned) this.markPathForRemove(oldPath);
+        if (newScanned) this.markPathForRescan((file as TFile).path);
+        this.queueTaskRefresh();
       }),
     );
     await this.render(true);
@@ -313,6 +343,8 @@ export class ReminderView extends ItemView {
     this.unsubscribeSelfModify?.();
     this.unsubscribeSelfModify = null;
     this.expectedSelfModifies.clear();
+    this.pendingRescanPaths.clear();
+    this.pendingRemovePaths.clear();
     if (this.fileOpenRef) {
       this.app.workspace.offref(this.fileOpenRef);
       this.fileOpenRef = null;
@@ -566,11 +598,33 @@ export class ReminderView extends ItemView {
       if (remaining === 1) this.expectedSelfModifies.delete(path);
       else this.expectedSelfModifies.set(path, remaining - 1);
       // Our self-writes already placed lines in the right section, so we
-      // just need the dashboard to re-render with the new file content.
+      // just need the dashboard to re-scan this file and re-render.
+      this.markPathForRescan(path);
       this.queueTaskRefresh();
       return;
     }
     void this.organizeAndRefreshTasks(file as TFile);
+  }
+
+  /** Queue a deleted file's tasks for removal without reading the dead file. */
+  private queueTaskRemoveForFile(file: TAbstractFile): void {
+    if (!(file instanceof TFile) || !this.isScannedMarkdownPath(file.path)) {
+      return;
+    }
+    this.markPathForRemove(file.path);
+    this.queueTaskRefresh();
+  }
+
+  /** Mark a path to be re-scanned (and any prior pending removal cancelled). */
+  private markPathForRescan(path: string): void {
+    this.pendingRemovePaths.delete(path);
+    this.pendingRescanPaths.add(path);
+  }
+
+  /** Mark a path's tasks for removal (and cancel any pending re-scan). */
+  private markPathForRemove(path: string): void {
+    this.pendingRescanPaths.delete(path);
+    this.pendingRemovePaths.add(path);
   }
 
   private async organizeAndRefreshTasks(file: TFile): Promise<void> {
@@ -598,6 +652,9 @@ export class ReminderView extends ItemView {
       await promise;
     } finally {
       this.organizingPromises.delete(file.path);
+      // Organize may have rewritten this file in place; re-scan it so the
+      // dashboard reflects the post-organize content (read at fire time).
+      this.markPathForRescan(file.path);
       this.queueTaskRefresh();
     }
   }
@@ -617,9 +674,76 @@ export class ReminderView extends ItemView {
     }
     this.scanDebounceHandle = window.setTimeout(async () => {
       this.scanDebounceHandle = null;
-      await this.refreshScrapedTasks();
+      await this.refreshScrapedTasksIncremental();
       await this.render();
     }, 800);
+  }
+
+  /**
+   * F06: re-scan ONLY the files changed during the debounce window and splice
+   * their tasks into the cached list, instead of re-reading and re-parsing
+   * every markdown file in the vault on each edit. Behavior-preserving: the
+   * result equals a full scan() for the same vault state because the splice
+   * re-sorts with the identical (filePath, line) comparator scan() uses, and
+   * relinkTaskReferences is re-run on the rebuilt array just like a full scan.
+   */
+  private async refreshScrapedTasksIncremental(): Promise<boolean> {
+    const rescanPaths = [...this.pendingRescanPaths];
+    const removePaths = new Set(this.pendingRemovePaths);
+    this.pendingRescanPaths.clear();
+    this.pendingRemovePaths.clear();
+
+    if (rescanPaths.length === 0 && removePaths.size === 0) {
+      // No accumulated deltas (e.g. fired purely for a re-render). Fall back to
+      // the existing single-flight so a concurrent caller still coalesces.
+      return this.refreshScrapedTasks();
+    }
+
+    // Serialize behind any in-flight full/incremental refresh: both mutate
+    // this.scrapedTasks and relinkTaskReferences (which edits data.reminders in
+    // place). Re-applying our deltas after a full scan is idempotent — the
+    // total-order splice reproduces the same array — so correctness holds even
+    // when a full scan superseded these same files.
+    const previous = this.scrapedTasksRefresh;
+    const run = (async (): Promise<boolean> => {
+      if (previous) await previous.catch(() => undefined);
+      this.isScanningTasks = true;
+      try {
+        const rescanned = new Map<string, ScrapedTask[]>();
+        for (const path of rescanPaths) {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          // The file may have been deleted/renamed between event and fire; if
+          // it no longer resolves, treat it as a removal instead of reading.
+          if (file instanceof TFile) {
+            rescanned.set(path, await this.taskScanner.scanFile(file));
+          } else {
+            removePaths.add(path);
+          }
+        }
+        this.scrapedTasks = spliceScrapedTasks(
+          this.scrapedTasks,
+          rescanned,
+          removePaths,
+        );
+        await this.store.relinkTaskReferences(this.scrapedTasks);
+        this.hasScannedTasks = true;
+        return true;
+      } catch (error) {
+        console.error("Quick Reminder task scan failed", error);
+        new Notice(getDashboardScanFailedNotice());
+        return false;
+      } finally {
+        this.isScanningTasks = false;
+      }
+    })();
+    this.scrapedTasksRefresh = run;
+    // Clear the in-flight handle once settled, but only if a newer refresh
+    // hasn't already replaced it. Attached after assignment so the closure
+    // doesn't reference `run` before it is initialized.
+    void run.finally(() => {
+      if (this.scrapedTasksRefresh === run) this.scrapedTasksRefresh = null;
+    });
+    return run;
   }
 
   private renderStats(
@@ -1893,11 +2017,21 @@ export class ReminderView extends ItemView {
     this.wireTaskRowActionButton(remindBtn, {
       busyText: "Adding...",
       action: async () => {
+        // Re-parse at click time: the render-time `dueAt` captured above goes
+        // stale for relative phrases (e.g. "in 15 minutes"). Clicking later
+        // would otherwise persist a now-past dueAt that Scheduler.schedule()
+        // drops (delay <= 0), losing the reminder silently. Mirror the
+        // modal.ts:183 and createTaskFromInput guards.
+        const fresh = parseReminder(task.text);
+        if (!fresh.dueAt || fresh.dueAt <= Date.now()) {
+          new Notice(getReminderPastTimeNotice());
+          return;
+        }
         const reminder: Reminder = {
           id: `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-          text: parsed.text,
+          text: fresh.text,
           rawInput: task.text,
-          dueAt,
+          dueAt: fresh.dueAt,
           createdAt: Date.now(),
           notified: false,
           sourceTaskId: task.id,
@@ -3061,975 +3195,31 @@ export class ReminderView extends ItemView {
   }
 }
 
-interface TasksPluginApi {
-  editTaskLineModal(line: string): Promise<string>;
-}
-
-class IgnoreTaskModal extends Modal {
-  private noteEl!: HTMLTextAreaElement;
-  private submitBtn!: HTMLButtonElement;
-  private isSubmitting = false;
-
-  constructor(
-    app: App,
-    private task: ScrapedTask,
-    private onSubmit: (note: string) => ModalSubmitResult | Promise<ModalSubmitResult>,
-    private onClosed: () => void = () => {},
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("qr-modal");
-
-    const header = contentEl.createDiv({ cls: "qr-modal-header" });
-    header.createEl("h2", { text: "Ignore task" });
-
-    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
-
-    const field = contentEl.createDiv({ cls: "qr-field" });
-    field.createEl("label", {
-      text: "Note",
-      cls: "qr-field-label",
-      attr: { for: "qr-ignore-note" },
-    });
-    this.noteEl = field.createEl("textarea", {
-      attr: { id: "qr-ignore-note" },
-      cls: "qr-ignore-note-input",
-    });
-    this.noteEl.rows = 4;
-    this.noteEl.placeholder = "Optional reason";
-
-    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
-      this.close();
-    };
-    this.submitBtn = actions.createEl("button", { text: "Ignore", cls: "qr-primary-btn" });
-    this.submitBtn.onclick = () => {
-      void this.submit();
-    };
-
-    if (!shouldUseMobileTaskViewport()) {
-      window.setTimeout(() => this.noteEl.focus(), 0);
-    }
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.onClosed();
-  }
-
-  private async submit(): Promise<void> {
-    const note = this.noteEl.value.trim();
-    const result = await runSingleModalSubmit({
-      isSubmitting: () => this.isSubmitting,
-      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
-      submit: () => this.onSubmit(note),
-    });
-    if (result.started && shouldCloseAfterSubmit(result.result)) {
-      this.close();
-    }
-  }
-
-  private setSubmitting(isSubmitting: boolean): void {
-    this.isSubmitting = isSubmitting;
-    if (!this.submitBtn) return;
-    const presentation = getModalSubmitButtonPresentation(
-      isSubmitting,
-      "Ignore",
-      "Ignoring...",
-    );
-    this.submitBtn.disabled = presentation.disabled;
-    this.submitBtn.setText(presentation.text);
-  }
-}
-
-class DeleteTaskModal extends Modal {
-  private submitBtn!: HTMLButtonElement;
-  private isSubmitting = false;
-
-  constructor(
-    app: App,
-    private task: ScrapedTask,
-    private onConfirm: () => ModalSubmitResult | Promise<ModalSubmitResult>,
-    private onClosed: () => void = () => {},
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("qr-modal");
-
-    const header = contentEl.createDiv({ cls: "qr-modal-header" });
-    header.createEl("h2", { text: "Delete task" });
-    contentEl.createDiv({ text: this.task.text, cls: "qr-ignore-task-text" });
-    contentEl.createDiv({
-      text: `${this.task.filePath}:${this.task.line}`,
-      cls: "qr-view-row-when",
-    });
-
-    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
-      this.close();
-    };
-    this.submitBtn = actions.createEl("button", {
-      text: "Delete",
-      cls: "qr-primary-btn qr-view-del",
-    });
-    this.submitBtn.onclick = () => {
-      void this.submit();
-    };
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.onClosed();
-  }
-
-  private async submit(): Promise<void> {
-    const result = await runSingleModalSubmit({
-      isSubmitting: () => this.isSubmitting,
-      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
-      submit: () => this.onConfirm(),
-    });
-    if (result.started && shouldCloseAfterSubmit(result.result)) {
-      this.close();
-    }
-  }
-
-  private setSubmitting(isSubmitting: boolean): void {
-    this.isSubmitting = isSubmitting;
-    if (!this.submitBtn) return;
-    const presentation = getModalSubmitButtonPresentation(
-      isSubmitting,
-      "Delete",
-      "Deleting...",
-    );
-    this.submitBtn.disabled = presentation.disabled;
-    this.submitBtn.setText(presentation.text);
-  }
-}
-
-class TaskContextNoteModal extends Modal {
-  private noteEl!: HTMLTextAreaElement;
-  private statusEl!: HTMLDivElement;
-  private submitBtn!: HTMLButtonElement;
-  private isSubmitting = false;
-  private status: TaskStatusPick;
-  private readonly initialStatus: TaskStatusPick;
-
-  constructor(
-    app: App,
-    private task: ScrapedTask,
-    private onSubmit: (
-      rawNoteBlock: string,
-      statusChange: TaskStatusPick | null,
-    ) => ModalSubmitResult | Promise<ModalSubmitResult>,
-    private onOpenTasksEditor: (() => void) | null = null,
-    private onClosed: () => void = () => {},
-  ) {
-    super(app);
-    this.initialStatus = mapTaskKindToStatusPick(task);
-    this.status = this.initialStatus;
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("qr-modal");
-    contentEl.addClass("qr-task-edit-modal");
-
-    const header = contentEl.createDiv({ cls: "qr-modal-header" });
-    header.createEl("h2", { text: "Edit task" });
-
-    contentEl.createDiv({ text: this.task.text, cls: "qr-task-edit-title" });
-
-    const statusField = contentEl.createDiv({ cls: "qr-field" });
-    statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
-    this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
-    this.renderStatusPill("todo", "circle", "To Do");
-    this.renderStatusPill("in-progress", "loader-circle", "In Progress");
-    this.renderStatusPill("completed", "check-circle-2", "Done");
-
-    const field = contentEl.createDiv({ cls: "qr-field" });
-    field.createEl("label", {
-      text: "Notes",
-      cls: "qr-field-label",
-      attr: { for: "qr-task-context-note" },
-    });
-    this.noteEl = field.createEl("textarea", {
-      attr: { id: "qr-task-context-note" },
-      cls: "qr-input qr-input-textarea qr-task-note-edit-input",
-    });
-    this.noteEl.rows = 6;
-    this.noteEl.placeholder = "- blocked by firewall change\n- ask vendor for installer flag\nverify on prod hosts";
-    this.noteEl.value = getTaskContextNoteEditBlock(this.task);
-    this.noteEl.addEventListener("keydown", (event) => handleTextareaIndent(event, this.noteEl));
-
-    if (this.onOpenTasksEditor) {
-      const advanced = contentEl.createDiv({ cls: "qr-modal-advanced" });
-      const link = advanced.createEl("button", {
-        text: "Open in Tasks plugin (due, priority, recurring…)",
-        cls: "qr-link-btn",
-      });
-      link.onclick = () => {
-        this.close();
-        this.onOpenTasksEditor?.();
-      };
-    }
-
-    const actions = contentEl.createDiv({ cls: "qr-modal-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => {
-      this.close();
-    };
-    this.submitBtn = actions.createEl("button", { text: "Save", cls: "qr-primary-btn" });
-    this.submitBtn.onclick = () => {
-      void this.submit();
-    };
-
-    if (!shouldUseMobileTaskViewport()) {
-      window.setTimeout(() => this.noteEl.focus(), 0);
-    }
-  }
-
-  private renderStatusPill(value: TaskStatusPick, icon: string, label: string): void {
-    const pill = this.statusEl.createEl("button", { cls: "qr-status-pill" });
-    pill.dataset.value = value;
-    const iconEl = pill.createSpan({ cls: "qr-status-pill-icon" });
-    setIcon(iconEl, icon);
-    pill.createSpan({ text: label });
-    pill.toggleClass("is-active", this.status === value);
-    pill.onclick = () => {
-      this.status = value;
-      for (const child of Array.from(this.statusEl.children)) {
-        child.removeClass("is-active");
-      }
-      pill.addClass("is-active");
-    };
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.onClosed();
-  }
-
-  private async submit(): Promise<void> {
-    const statusChange = this.status === this.initialStatus ? null : this.status;
-    const result = await runSingleModalSubmit({
-      isSubmitting: () => this.isSubmitting,
-      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
-      submit: () => this.onSubmit(this.noteEl.value, statusChange),
-    });
-    if (result.started && shouldCloseAfterSubmit(result.result)) {
-      this.close();
-    }
-  }
-
-  private setSubmitting(isSubmitting: boolean): void {
-    this.isSubmitting = isSubmitting;
-    if (!this.submitBtn) return;
-    const presentation = getModalSubmitButtonPresentation(
-      isSubmitting,
-      "Save",
-      "Saving...",
-    );
-    this.submitBtn.disabled = presentation.disabled;
-    this.submitBtn.setText(presentation.text);
-  }
-}
-
-function mapTaskKindToStatusPick(task: ScrapedTask): TaskStatusPick {
-  if (task.kind !== "checkbox") return "todo";
-  if (task.status === "completed") return "completed";
-  if (task.status === "in-progress") return "in-progress";
-  return "todo";
-}
-
-class NewItemModal extends Modal {
-  constructor(
-    app: App,
-    private onTask: () => void,
-    private onReminder: () => void,
-    private onProjectPlanner: () => void,
-    private onClosed: () => void = () => {},
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.contentEl.empty();
-    this.contentEl.addClass("qr-modal");
-    this.contentEl.addClass("qr-new-item-modal");
-    this.contentEl.createEl("h2", { text: "Create new" });
-    this.contentEl.createEl("p", {
-      text: "What do you want to add?",
-      cls: "qr-modal-subtitle",
-    });
-
-    const grid = this.contentEl.createDiv({ cls: "qr-pick-grid" });
-    this.renderPick(grid, "list-checks", "Task", "Add to a markdown checklist", () => {
-      this.close();
-      this.onTask();
-    });
-    this.renderPick(grid, "alarm-clock", "Reminder", "Notify me at a specific time", () => {
-      this.close();
-      this.onReminder();
-    });
-    this.renderPick(grid, "folder-kanban", "Project Planner", "Create a project note from an outline", () => {
-      this.close();
-      this.onProjectPlanner();
-    });
-  }
-
-  private renderPick(
-    parent: HTMLElement,
-    icon: string,
-    title: string,
-    subtitle: string,
-    onClick: () => void,
-  ): void {
-    const card = parent.createEl("button", { cls: "qr-pick-card" });
-    const iconWrap = card.createSpan({ cls: "qr-pick-icon" });
-    setIcon(iconWrap, icon);
-    const text = card.createDiv({ cls: "qr-pick-text" });
-    text.createDiv({ text: title, cls: "qr-pick-title" });
-    text.createDiv({ text: subtitle, cls: "qr-pick-subtitle" });
-    card.onclick = onClick;
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.onClosed();
-  }
-}
-
-type TaskStatusPick = "todo" | "in-progress" | "completed";
-
-type NewTaskRequest = {
-  rawInput: string;
-  status: TaskStatusPick;
-  targetFilePath: string;
-  details: string;
-};
-
-class NewTaskModal extends Modal {
-  private inputEl!: HTMLTextAreaElement;
-  private targetFileEl!: HTMLInputElement;
-  private detailsEl!: HTMLTextAreaElement;
-  private previewEl!: HTMLDivElement;
-  private statusEl!: HTMLDivElement;
-  private submitBtn!: HTMLButtonElement;
-  private status: TaskStatusPick = "todo";
-  private isSubmitting = false;
-
-  constructor(
-    app: App,
-    private withReminder: boolean,
-    private initialFilePath: string,
-    private onSubmit: (request: NewTaskRequest) => ModalSubmitResult | Promise<ModalSubmitResult>,
-    private onClosed: () => void = () => {},
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.contentEl.empty();
-    this.contentEl.addClass("qr-modal");
-    this.contentEl.addClass("qr-new-task-modal");
-    this.contentEl.createEl("h2", {
-      text: this.withReminder ? "New reminder task" : "New task",
-    });
-
-    const statusField = this.contentEl.createDiv({ cls: "qr-field" });
-    statusField.createEl("label", { text: "Status", cls: "qr-field-label" });
-    this.statusEl = statusField.createDiv({ cls: "qr-status-pills" });
-    this.renderStatusPill("todo", "circle", "To Do");
-    this.renderStatusPill("in-progress", "loader-circle", "In Progress");
-    if (!this.withReminder) {
-      this.renderStatusPill("completed", "check-circle-2", "Done");
-    }
-
-    const field = this.contentEl.createDiv({ cls: "qr-field" });
-    field.createEl("label", {
-      text: this.withReminder ? "Task and time" : "Task",
-      cls: "qr-field-label",
-    });
-    this.inputEl = field.createEl("textarea", {
-      cls: "qr-input qr-input-textarea",
-      placeholder: this.withReminder
-        ? "e.g. call Alex tomorrow 3pm"
-        : "e.g. follow up with Alex",
-    });
-    this.inputEl.rows = 3;
-    this.inputEl.addEventListener("input", () => this.renderPreview());
-    this.inputEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void this.submit();
-      }
-    });
-
-    const options = this.contentEl.createDiv({ cls: "qr-task-options" });
-    const targetField = options.createDiv({ cls: "qr-field" });
-    targetField.createEl("label", { text: "Save to", cls: "qr-field-label" });
-    this.targetFileEl = targetField.createEl("input", {
-      type: "text",
-      cls: "qr-input qr-task-target-input",
-      value: this.initialFilePath,
-    });
-    this.targetFileEl.addEventListener("input", () => this.renderPreview());
-    this.attachMarkdownFileOptions(this.targetFileEl);
-
-    const detailsField = options.createDiv({ cls: "qr-field" });
-    detailsField.createEl("label", { text: "Details", cls: "qr-field-label" });
-    this.detailsEl = detailsField.createEl("textarea", {
-      cls: "qr-input qr-input-textarea qr-task-details-input",
-      placeholder: "Notes, links, context",
-    });
-    this.detailsEl.rows = 2;
-    this.detailsEl.addEventListener("input", () => this.renderPreview());
-
-    this.previewEl = this.contentEl.createDiv({ cls: "qr-preview" });
-    this.renderPreview();
-
-    const actions = this.contentEl.createDiv({ cls: "qr-modal-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-secondary-btn" }).onclick = () => this.close();
-    this.submitBtn = actions.createEl("button", {
-      text: this.submitLabel(),
-      cls: "qr-primary-btn",
-    });
-    this.submitBtn.onclick = () => {
-      void this.submit();
-    };
-    window.setTimeout(() => this.inputEl.focus(), 0);
-  }
-
-  private renderStatusPill(value: TaskStatusPick, icon: string, label: string): void {
-    const pill = this.statusEl.createEl("button", { cls: "qr-status-pill" });
-    pill.dataset.value = value;
-    const iconEl = pill.createSpan({ cls: "qr-status-pill-icon" });
-    setIcon(iconEl, icon);
-    pill.createSpan({ text: label });
-    pill.toggleClass("is-active", this.status === value);
-    pill.onclick = () => {
-      this.status = value;
-      for (const child of Array.from(this.statusEl.children)) {
-        child.removeClass("is-active");
-      }
-      pill.addClass("is-active");
-      this.renderPreview();
-    };
-  }
-
-  private renderPreview(): void {
-    this.previewEl.empty();
-    const raw = this.inputEl.value.trim();
-    const target = this.targetFileEl?.value.trim() || DEFAULT_CATEGORY_FILE_PATH;
-    const detailsCount = normalizeContextNoteLines((this.detailsEl?.value ?? "").split(/\r?\n/)).length;
-    if (!raw) {
-      this.previewEl.createDiv({
-        text: "Type a task description",
-        cls: "qr-preview-status qr-preview-muted",
-      });
-      this.previewRow("Save to", target);
-      if (detailsCount > 0) this.previewRow("Details", `${detailsCount} note${detailsCount === 1 ? "" : "s"}`);
-      return;
-    }
-
-    if (this.withReminder) {
-      const parsed = parseReminder(raw);
-      const ready = !!parsed.dueAt && parsed.dueAt > Date.now();
-      this.previewEl.createDiv({
-        text: ready ? "Ready to create" : "Add a date or time",
-        cls: `qr-preview-status ${ready ? "is-ready" : "needs-time"}`,
-      });
-      this.previewRow("Task", parsed.text || raw);
-      this.previewRow("Status", this.statusLabel());
-      this.previewRow("Save to", target);
-      if (parsed.dueAt) {
-        this.previewRow(
-          "Time",
-          new Date(parsed.dueAt).toLocaleString(undefined, {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          }),
-        );
-        if (parsed.matchedText) {
-          this.previewEl.createDiv({
-            text: `Detected "${parsed.matchedText}"`,
-            cls: "qr-preview-meta",
-          });
-        }
-      } else {
-        this.previewRow("Time", "No time detected", "qr-preview-warn");
-      }
-    } else {
-      this.previewEl.createDiv({
-        text: "Ready to create",
-        cls: "qr-preview-status is-ready",
-      });
-      this.previewRow("Task", raw);
-      this.previewRow("Status", this.statusLabel());
-      this.previewRow("Save to", target);
-    }
-    if (detailsCount > 0) this.previewRow("Details", `${detailsCount} note${detailsCount === 1 ? "" : "s"}`);
-  }
-
-  private previewRow(label: string, value: string, cls = ""): void {
-    const row = this.previewEl.createDiv({ cls: "qr-preview-row" });
-    row.createSpan({ text: label, cls: "qr-preview-label" });
-    row.createSpan({ text: value, cls });
-  }
-
-  private statusLabel(): string {
-    if (this.status === "todo") return "To Do";
-    if (this.status === "in-progress") return "In Progress";
-    return "Done";
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.onClosed();
-  }
-
-  private async submit(): Promise<void> {
-    const value = this.inputEl.value.trim();
-    if (!value) {
-      new Notice(getTaskCreateTextMissingNotice());
-      return;
-    }
-    const result = await runSingleModalSubmit({
-      isSubmitting: () => this.isSubmitting,
-      setSubmitting: (isSubmitting) => this.setSubmitting(isSubmitting),
-      submit: () => this.onSubmit({
-        rawInput: value,
-        status: this.status,
-        targetFilePath: this.targetFileEl.value.trim() || DEFAULT_CATEGORY_FILE_PATH,
-        details: this.detailsEl.value,
-      }),
-    });
-    if (result.started && shouldCloseAfterSubmit(result.result)) {
-      this.close();
-    }
-  }
-
-  private submitLabel(): string {
-    return this.withReminder ? "Create task + reminder" : "Create task";
-  }
-
-  private submittingLabel(): string {
-    return this.withReminder ? "Creating task + reminder..." : "Creating task...";
-  }
-
-  private setSubmitting(isSubmitting: boolean): void {
-    this.isSubmitting = isSubmitting;
-    if (!this.submitBtn) return;
-    this.submitBtn.disabled = isSubmitting;
-    this.submitBtn.setText(isSubmitting ? this.submittingLabel() : this.submitLabel());
-  }
-
-  private attachMarkdownFileOptions(input: HTMLInputElement): void {
-    const list = document.createElement("datalist");
-    list.id = `qr-task-files-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    for (const file of this.app.vault
-      .getMarkdownFiles()
-      .sort((a, b) => a.path.localeCompare(b.path))) {
-      const option = document.createElement("option");
-      option.value = file.path;
-      list.appendChild(option);
-    }
-    input.setAttr("list", list.id);
-    input.after(list);
-  }
-}
-
-function getTasksPluginApi(app: unknown): TasksPluginApi | null {
-  const tasksPlugin = (app as {
-    plugins?: { plugins?: Record<string, unknown> };
-  }).plugins?.plugins?.["obsidian-tasks-plugin"] as { apiV1?: unknown } | undefined;
-  const api = tasksPlugin?.apiV1 as Partial<TasksPluginApi> | undefined;
-  return typeof api?.editTaskLineModal === "function" ? (api as TasksPluginApi) : null;
-}
-
-function getSummaryText(
-  overdueCount: number,
-  upcomingCount: number,
-  scrapedCount: number,
-  taskScope: TaskDashboardScope,
-  activeFilePath: string | null,
-  folderPath: string | null,
-): string {
-  const taskLabel = getTaskScopeLabel(taskScope, activeFilePath, folderPath);
-  if (overdueCount > 0) {
-    return `${overdueCount} overdue - ${upcomingCount} upcoming - ${scrapedCount} ${taskLabel}`;
-  }
-  if (upcomingCount > 0) {
-    return `${upcomingCount} upcoming - ${scrapedCount} ${taskLabel}`;
-  }
-  if (scrapedCount > 0) {
-    return `${scrapedCount} ${taskLabel}`;
-  }
-  if (taskScope === "active" && !activeFilePath) {
-    return "No active markdown file";
-  }
-  if (taskScope === "folder" && folderPath === null) {
-    return "No active folder";
-  }
-  return "Nothing pending";
-}
-
-function getTaskScopeLabel(
-  taskScope: TaskDashboardScope,
-  activeFilePath: string | null,
-  folderPath: string | null,
-): string {
-  if (taskScope === "folder" && folderPath !== null) {
-    return "folder tasks";
-  }
-  if (taskScope === "active" && activeFilePath) {
-    return "current file tasks";
-  }
-  return "vault tasks";
-}
-
-function isInFolder(filePath: string, folderPath: string): boolean {
-  if (folderPath === "" || folderPath === "/" || folderPath === ".") {
-    return !filePath.includes("/");
-  }
-  const normalizedFolder = folderPath.replace(/^\/+|\/+$/g, "");
-  if (!normalizedFolder) {
-    return !filePath.includes("/");
-  }
-  return filePath === normalizedFolder || filePath.startsWith(`${normalizedFolder}/`);
-}
-
-function getCurrentFolderScopePath(filePath: string | null, folderPath: string | null): string | null {
-  if (folderPath === null) {
-    return null;
-  }
-  if (!filePath?.includes("/")) {
-    return folderPath;
-  }
-  // Use the file's actual parent folder, not just the top-level segment.
-  // Previously a file at Projects/Alpha/Beta/note.md scoped to "Projects"
-  // and silently broadened the folder view to the whole top-level tree.
-  const parent = filePath.slice(0, filePath.lastIndexOf("/"));
-  return parent || folderPath;
-}
-
-type TaskDisplayNoteGroup = {
-  filePath: string;
-  statuses: Array<{
-    title: string;
-    categories: Array<{
-      title: string;
-      tasks: ScrapedTask[];
-    }>;
-  }>;
-};
-
-const PHASE_PAGE_SIZE = 25;
-
-type TaskPhaseGroup = {
-  name: string;
-  isInbox: boolean;
-  tasks: ScrapedTask[];
-};
-
-type TaskPhaseNoteGroup = {
-  filePath: string;
-  phases: TaskPhaseGroup[];
-};
-
-function groupTasksByPhase(tasks: ScrapedTask[]): TaskPhaseNoteGroup[] {
-  const notes: TaskPhaseNoteGroup[] = [];
-  for (const task of tasks) {
-    let note = notes.find((n) => n.filePath === task.filePath);
-    if (!note) {
-      note = { filePath: task.filePath, phases: [] };
-      notes.push(note);
-    }
-    const raw = (task.category || "").trim();
-    const isInbox = raw === "" || raw.toLowerCase() === "uncategorized";
-    const name = isInbox ? "Inbox" : raw;
-    let phase = note.phases.find(
-      (p) => p.name === name && p.isInbox === isInbox,
-    );
-    if (!phase) {
-      phase = { name, isInbox, tasks: [] };
-      note.phases.push(phase);
-    }
-    phase.tasks.push(task);
-  }
-  for (const note of notes) {
-    // Inbox first, then alphabetical phases by first appearance order (already preserved)
-    note.phases.sort((a, b) =>
-      a.isInbox === b.isInbox ? 0 : a.isInbox ? -1 : 1,
-    );
-  }
-  return notes;
-}
-
-function getPhaseAccentHue(name: string): number {
-  // Deterministic hue 0-359 from name; FNV-1a 32-bit hash mod 360.
-  let h = 0x811c9dc5;
-  for (let i = 0; i < name.length; i += 1) {
-    h ^= name.charCodeAt(i);
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  return h % 360;
-}
-
-function groupTasksForDisplay(tasks: ScrapedTask[]): TaskDisplayNoteGroup[] {
-  const statusOrder: Array<ScrapedTask["status"]> = ["in-progress", "todo", "marker", "completed"];
-  const notes: TaskDisplayNoteGroup[] = [];
-
-  for (const task of tasks) {
-    let note = notes.find((candidate) => candidate.filePath === task.filePath);
-    if (!note) {
-      note = { filePath: task.filePath, statuses: [] };
-      notes.push(note);
-    }
-
-    const statusTitle = getTaskStatusTitle(task.status);
-    let status = note.statuses.find((candidate) => candidate.title === statusTitle);
-    if (!status) {
-      status = { title: statusTitle, categories: [] };
-      note.statuses.push(status);
-    }
-
-    const categoryTitle = getTaskCategoryTitle(task, statusTitle);
-    let category = status.categories.find((candidate) => candidate.title === categoryTitle);
-    if (!category) {
-      category = { title: categoryTitle, tasks: [] };
-      status.categories.push(category);
-    }
-    category.tasks.push(task);
-  }
-
-  for (const note of notes) {
-    note.statuses.sort((a, b) => statusOrder.indexOf(getStatusFromTitle(a.title)) - statusOrder.indexOf(getStatusFromTitle(b.title)));
-  }
-
-  return notes;
-}
-
-function getTaskStatusTitle(status: ScrapedTask["status"]): string {
-  if (status === "in-progress") {
-    return "In Progress";
-  }
-  if (status === "completed") {
-    return "Completed";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  if (status === "marker") {
-    return "Markers";
-  }
-  return "To Do";
-}
-
-function getTaskContextSummaryText(count: number): string {
-  if (count === 1) return "1 subtask / note";
-  return `${count} subtasks / notes`;
-}
-
-function getTaskCategoryTitle(task: ScrapedTask, statusTitle: string): string {
-  const category = task.category?.trim() || "Uncategorized";
-  return category.toLowerCase() === statusTitle.toLowerCase() ? "" : category;
-}
-
-function getStatusFromTitle(title: string): ScrapedTask["status"] {
-  if (title === "In Progress") {
-    return "in-progress";
-  }
-  if (title === "Completed") {
-    return "completed";
-  }
-  if (title === "Cancelled") {
-    return "cancelled";
-  }
-  if (title === "Markers") {
-    return "marker";
-  }
-  return "todo";
-}
-
-function compareTaskPageOrder(a: ScrapedTask, b: ScrapedTask): number {
-  return a.filePath.localeCompare(b.filePath) || a.line - b.line;
-}
-
-function getTaskPriorityRank(text: string): number {
-  const normalized = text.toLowerCase();
-  if (hasPriorityEmoji(text, "\u{1F53A}") || hasInlinePriority(normalized, "(?:highest|urgent|critical)") || /\b(?:priority|prio)\s*[:=]\s*(?:highest|urgent|critical)\b/.test(normalized) || /#(?:priority|prio)\/(?:highest|urgent|critical)\b/.test(normalized) || /\bp0\b/.test(normalized) || /!!!/.test(text)) {
-    return 0;
-  }
-  if (hasPriorityEmoji(text, "\u{23EB}") || hasInlinePriority(normalized, "high") || /\b(?:priority|prio)\s*[:=]\s*high\b/.test(normalized) || /#(?:priority|prio)\/high\b/.test(normalized) || /\bp1\b/.test(normalized) || /!!/.test(text)) {
-    return 1;
-  }
-  if (hasPriorityEmoji(text, "\u{1F53C}") || hasInlinePriority(normalized, "medium") || /\b(?:priority|prio)\s*[:=]\s*medium\b/.test(normalized) || /#(?:priority|prio)\/medium\b/.test(normalized) || /\bp2\b/.test(normalized)) {
-    return 2;
-  }
-  if (hasPriorityEmoji(text, "\u{1F53D}") || hasInlinePriority(normalized, "low") || /\b(?:priority|prio)\s*[:=]\s*low\b/.test(normalized) || /#(?:priority|prio)\/low\b/.test(normalized) || /\bp3\b/.test(normalized)) {
-    return 3;
-  }
-  if (hasPriorityEmoji(text, "\u{23EC}") || hasInlinePriority(normalized, "lowest") || /\b(?:priority|prio)\s*[:=]\s*lowest\b/.test(normalized) || /#(?:priority|prio)\/lowest\b/.test(normalized) || /\bp4\b/.test(normalized)) {
-    return 4;
-  }
-  return 5;
-}
-
-function splitTaskInput(input: string): { taskText: string; contextNotes: string[] } {
-  const lines = input.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const [taskText = "", ...contextNotes] = lines;
-  return { taskText, contextNotes: normalizeContextNoteLines(contextNotes) };
-}
-
-function normalizeContextNoteLines(lines: string[]): string[] {
-  return lines.map((line) => line.trim().replace(/^[-*+]\s+/, "").trim()).filter(Boolean);
-}
-
-function getTaskContextNoteEditBlock(task: ScrapedTask): string {
-  if (task.contextNoteLines.length > 0) {
-    return deindentLines(task.contextNoteLines).join("\n");
-  }
-  return task.contextNotes.join("\n");
-}
-
-function deindentLines(lines: string[]): string[] {
-  const commonIndent = getCommonIndentLength(lines);
-  return lines.map((line) => line.slice(commonIndent));
-}
-
-function getCommonIndentLength(lines: string[]): number {
-  const nonBlank = lines.filter((line) => line.trim() !== "");
-  if (nonBlank.length === 0) return 0;
-  return Math.min(...nonBlank.map((line) => line.match(/^\s*/)?.[0].length ?? 0));
-}
-
-function handleTextareaIndent(event: KeyboardEvent, textarea: HTMLTextAreaElement): void {
-  if (event.key !== "Tab") return;
-  event.preventDefault();
-
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  const value = textarea.value;
-  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-  const lineEnd = end === start ? end : value.indexOf("\n", end);
-  const selectionEnd = lineEnd === -1 ? value.length : lineEnd;
-  const selected = value.slice(lineStart, selectionEnd);
-  const updated = event.shiftKey
-    ? selected.replace(/^(?:  |\t)/gm, "")
-    : selected.replace(/^/gm, "  ");
-
-  textarea.value = `${value.slice(0, lineStart)}${updated}${value.slice(selectionEnd)}`;
-  textarea.selectionStart = lineStart;
-  textarea.selectionEnd = lineStart + updated.length;
-}
-
-function hasInlinePriority(normalizedText: string, valuePattern: string): boolean {
-  return new RegExp(`\\[\\s*(?:priority|prio)::\\s*${valuePattern}\\s*\\]`).test(normalizedText);
-}
-
-function hasPriorityEmoji(text: string, emoji: string): boolean {
-  return text.includes(emoji);
-}
-
-function getEmptyScrapedText(title: string, totalCount: number): string {
-  if (totalCount > 0) {
-    return "No tasks match the current filters.";
-  }
-  if (title === "Completed vault tasks") {
-    return "No completed vault tasks found.";
-  }
-  if (title === "Ignored") {
-    return "No ignored tasks.";
-  }
-  return "No unchecked tasks or TODO markers found.";
-}
-
-function getTaskKindBadgeText(task: ScrapedTask): string {
-  return task.kind === "checkbox" ? "Checkbox" : task.marker ?? "Marker";
-}
-
-function getTaskStatusClassName(status: ScrapedTask["status"]): string {
-  return status.replace(/[^a-z0-9]+/g, "-");
-}
-
-function getEmptyText(title: string, isHistory: boolean): string {
-  if (isHistory) return "No past reminders.";
-  if (title === "Upcoming") return "No upcoming reminders.";
-  return "No reminders here.";
-}
-
-function formatWhen(ms: number): string {
-  const now = Date.now();
-  const diff = ms - now;
-  const abs = Math.abs(diff);
-  const mins = Math.round(abs / 60_000);
-  const hours = Math.round(abs / 3_600_000);
-  const days = Math.round(abs / 86_400_000);
-
-  const exact = formatExact(ms);
-  if (diff < 0) return `overdue - ${exact}`;
-  if (mins < 60) return `in ${mins}m - ${exact}`;
-  if (hours < 24) return `in ${hours}h - ${exact}`;
-  return `in ${days}d - ${exact}`;
-}
-
-function formatHistoryWhen(reminder: Reminder): string {
-  if (reminder.completedAt) {
-    return `${formatAgo(reminder.completedAt)} done - due ${formatExact(reminder.dueAt)}`;
-  }
-  const notifiedAt = reminder.notifiedAt ?? reminder.dueAt;
-  return `${formatAgo(notifiedAt)} notified - due ${formatExact(reminder.dueAt)}`;
-}
-
-function formatAgo(ms: number): string {
-  const abs = Math.abs(Date.now() - ms);
-  const mins = Math.round(abs / 60_000);
-  const hours = Math.round(abs / 3_600_000);
-  const days = Math.round(abs / 86_400_000);
-  if (mins < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  return `${days}d ago`;
-}
-
-function formatExact(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatInputDate(ms: number): string {
-  // Build the datetime-local string from local-time field accessors so it
-  // stays correct across DST boundaries. The old offset-subtraction trick
-  // shifted by an hour for any time on the other side of a DST transition.
-  const date = new Date(ms);
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-}
-
-function hasFutureDueAt(dueAt: number | null): dueAt is number {
-  return dueAt !== null && dueAt > Date.now();
-}
-
-function genReminderId(): string {
-  return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+/**
+ * F06 incremental refresh: produce the cached task list after re-scanning the
+ * given files and removing deleted ones, WITHOUT re-scanning the whole vault.
+ *
+ * Behavior-preserving by construction: every task is dropped if its filePath is
+ * in `removePaths` or `rescanned` (the old copies of re-scanned files), then the
+ * fresh tasks are concatenated and the whole array is re-sorted with the exact
+ * comparator scan() uses (taskScanner.ts:34). Because (filePath, line) is unique
+ * per task, that comparator is a strict total order, so the result is identical
+ * to a full scan() over the same vault state regardless of insertion order.
+ *
+ * Exported for unit testing the splice independently of the Obsidian view.
+ */
+export function spliceScrapedTasks(
+  cached: ScrapedTask[],
+  rescanned: Map<string, ScrapedTask[]>,
+  removePaths: Set<string>,
+): ScrapedTask[] {
+  const replaced = (path: string): boolean =>
+    removePaths.has(path) || rescanned.has(path);
+  const next = cached.filter((task) => !replaced(task.filePath));
+  for (const tasks of rescanned.values()) {
+    next.push(...tasks);
+  }
+  return next.sort(
+    (a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line,
+  );
 }

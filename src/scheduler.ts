@@ -84,7 +84,7 @@ export class Scheduler {
     const fired: string[] = [];
     for (const reminder of overdue) {
       try {
-        showNativeNotification(reminder, this.store.settings.soundOnNotify);
+        showNativeNotification(reminder, this.store.settings.soundOnNotify, this.plugin);
       } catch (e) {
         console.error("native notify failed, falling back to Notice", e);
         showFallbackNotice(reminder);
@@ -108,12 +108,20 @@ export class Scheduler {
     if (!current) return;
 
     try {
-      showNativeNotification(current, this.store.settings.soundOnNotify);
+      showNativeNotification(current, this.store.settings.soundOnNotify, this.plugin);
     } catch (e) {
       console.error("native notify failed, falling back to Notice", e);
       showFallbackNotice(current);
     }
-    await this.onFire(current);
+    try {
+      await this.onFire(current);
+    } catch (e) {
+      // onFire is store persistence. The user has already SEEN the
+      // notification, so a failed mark must not surface as an unhandled
+      // rejection (this method is invoked via `void this.fire(...)` from the
+      // timer callback). Worst case the reminder fires again next launch.
+      console.error("Quick Reminder reminder fire failed", e);
+    }
   }
 
   private findPendingReminder(id: string): Reminder | null {
@@ -121,7 +129,11 @@ export class Scheduler {
   }
 }
 
-function showNativeNotification(reminder: Reminder, silent: boolean): void {
+function showNativeNotification(
+  reminder: Reminder,
+  silent: boolean,
+  plugin?: Plugin,
+): void {
   // Mobile (Obsidian iOS/Android) does not expose the Web Notification API
   // reliably; some platforms' requestPermission never resolves. Fall back to
   // an in-app Notice so the reminder is never silently lost.
@@ -155,11 +167,17 @@ function showNativeNotification(reminder: Reminder, silent: boolean): void {
   // Race requestPermission against a timeout so the user always sees the
   // reminder even if the platform never resolves the permission promise.
   let resolved = false;
-  const fallbackTimer = setTimeout(() => {
+  // window.setTimeout (not bare setTimeout) so the handle is a DOM `number`,
+  // which Plugin.registerInterval requires (matches schedule() at line 41).
+  const fallbackTimer = window.setTimeout(() => {
     if (resolved) return;
     resolved = true;
     showFallbackNotice(reminder);
   }, PERMISSION_REQUEST_TIMEOUT_MS);
+  // Register so plugin unload clears the timer even if requestPermission
+  // never settles; otherwise this 5s raw setTimeout could fire
+  // showFallbackNotice after the plugin has unloaded.
+  plugin?.registerInterval(fallbackTimer);
 
   Notification.requestPermission()
     .then((perm) => {

@@ -68,6 +68,80 @@ test("saveScheduledReminder rolls back the store write when scheduling fails", a
   assert.deepEqual(calls, ["add:r1", "schedule", "cancel:r1", "remove:r1"]);
 });
 
+test("saveScheduledReminder reports a failing cancel during rollback yet still re-throws the original error", async () => {
+  const reminder = createReminder();
+  const calls: string[] = [];
+  const rollbackErrors: unknown[] = [];
+  const store = {
+    async add(value: Reminder) {
+      calls.push(`add:${value.id}`);
+    },
+    async remove(id: string) {
+      calls.push(`remove:${id}`);
+    },
+  };
+  const scheduler = {
+    schedule(value: Reminder) {
+      calls.push(`schedule:${value.id}`);
+    },
+    cancel() {
+      calls.push("cancel");
+      throw new Error("cancel failed");
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      saveScheduledReminder(
+        store,
+        scheduler,
+        reminder,
+        () => {
+          throw new Error("editor detached");
+        },
+        (error) => rollbackErrors.push(error),
+      ),
+    /editor detached/,
+  );
+
+  assert.equal(rollbackErrors.length, 1);
+  assert.equal((rollbackErrors[0] as Error).message, "cancel failed");
+  // store.remove still runs after cancel throws, so the second rollback step is not skipped
+  assert.deepEqual(calls, ["add:r1", "schedule:r1", "cancel", "remove:r1"]);
+});
+
+test("saveScheduledReminder reports a failing remove during rollback yet still re-throws the original error", async () => {
+  const reminder = createReminder();
+  const rollbackErrors: unknown[] = [];
+  const store = {
+    async add() {},
+    async remove() {
+      throw new Error("remove failed");
+    },
+  };
+  const scheduler = {
+    schedule() {},
+    cancel() {},
+  };
+
+  await assert.rejects(
+    () =>
+      saveScheduledReminder(
+        store,
+        scheduler,
+        reminder,
+        () => {
+          throw new Error("editor detached");
+        },
+        (error) => rollbackErrors.push(error),
+      ),
+    /editor detached/,
+  );
+
+  assert.equal(rollbackErrors.length, 1);
+  assert.equal((rollbackErrors[0] as Error).message, "remove failed");
+});
+
 test("saveScheduledReminder leaves the reminder alone after a successful post-save edit", async () => {
   const reminder = createReminder();
   const calls: string[] = [];

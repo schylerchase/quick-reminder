@@ -1,3 +1,9 @@
+// MIRROR of the ribbon-icon ordering helpers.
+// kb-manager/src/lib/ribbon-order.ts is the SOURCE OF TRUTH; this file is a
+// byte-for-logic-identical copy. Keep in sync with kb-manager/src/lib/ribbon-order.ts.
+// When logic changes there, port the same change (and any new test cases in
+// tests/ribbonOrder.test.ts) here. Only quote style may differ between copies.
+
 export function getRibbonIconIndex(iconEl: HTMLElement): number | null {
   const parent = iconEl.parentElement;
   if (!parent) return null;

@@ -15,6 +15,7 @@
 import {
   DELIMITER_START,
   DELIMITER_END,
+  detectNewline,
   findManagedBlock,
   insertEmptyManagedBlock,
   parseGroupsFromContent,
@@ -40,16 +41,18 @@ export type ContentRegion =
       after: string;
       startLine: number;
       endLine: number;
+      newline: "\r\n" | "\n";
     }
   | { kind: CONTENT_REGION.NoBlock };
 
 export function findContentRegion(content: string): ContentRegion {
   const loc = findManagedBlock(content);
   if (!loc.present) return { kind: CONTENT_REGION.NoBlock };
+  const nl = detectNewline(content);
   const lines = content.split(/\r?\n/);
-  const before = lines.slice(0, loc.startLine).join("\n");
-  const blockContent = lines.slice(loc.startLine + 1, loc.endLine).join("\n");
-  const after = lines.slice(loc.endLine + 1).join("\n");
+  const before = lines.slice(0, loc.startLine).join(nl);
+  const blockContent = lines.slice(loc.startLine + 1, loc.endLine).join(nl);
+  const after = lines.slice(loc.endLine + 1).join(nl);
   return {
     kind: CONTENT_REGION.WithBlock,
     before,
@@ -57,6 +60,7 @@ export function findContentRegion(content: string): ContentRegion {
     after,
     startLine: loc.startLine,
     endLine: loc.endLine,
+    newline: nl,
   };
 }
 
@@ -138,7 +142,7 @@ export function addTaskUnderHeading(
     }
   }
 
-  const newBefore = beforeLines.join("\n");
+  const newBefore = beforeLines.join(region.newline);
   const reassembled = assembleWithRegion(newBefore, region);
   return regenerateManagedBlock(reassembled);
 }
@@ -161,7 +165,7 @@ export function appendHeading(content: string, headingName: string): string {
     beforeLines.push("");
   }
   beforeLines.push(`## ${headingName}`);
-  const newBefore = beforeLines.join("\n");
+  const newBefore = beforeLines.join(region.newline);
   const reassembled = assembleWithRegion(newBefore, region);
   return regenerateManagedBlock(reassembled);
 }
@@ -172,6 +176,10 @@ export function renameHeadingInContent(
   newName: string,
 ): string {
   const region = findContentRegion(content);
+  const nl =
+    region.kind === CONTENT_REGION.WithBlock
+      ? region.newline
+      : detectNewline(content);
   const target =
     region.kind === CONTENT_REGION.WithBlock ? region.before : content;
   const updated = target
@@ -183,7 +191,7 @@ export function renameHeadingInContent(
       }
       return line;
     })
-    .join("\n");
+    .join(nl);
   if (region.kind === CONTENT_REGION.WithBlock) {
     const reassembled = assembleWithRegion(updated, region);
     return regenerateManagedBlock(reassembled);
@@ -196,12 +204,13 @@ export function setCheckboxStatusOnLine(
   lineIndex: number,
   statusChar: string,
 ): string {
+  const nl = detectNewline(content);
   const lines = content.split(/\r?\n/);
   if (lineIndex < 0 || lineIndex >= lines.length) return content;
   const match = lines[lineIndex].match(CHECKBOX_RE);
   if (!match) return content;
   lines[lineIndex] = `${match[1]}${statusChar}${match[3]}`;
-  return lines.join("\n");
+  return lines.join(nl);
 }
 
 function assembleWithRegion(
@@ -218,7 +227,7 @@ function assembleWithRegion(
   // Filter empty trailing segments to avoid stray blank lines, then re-join.
   return parts
     .filter((p, idx) => idx === 0 || idx === parts.length - 1 || true)
-    .join("\n");
+    .join(region.newline);
 }
 
 // Re-export for callers that want everything from one place

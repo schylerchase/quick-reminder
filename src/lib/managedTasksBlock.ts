@@ -18,6 +18,14 @@
 export const DELIMITER_START = "<!-- qr:tasks:start -->";
 export const DELIMITER_END = "<!-- qr:tasks:end -->";
 
+/**
+ * Detect the document's line ending so transforms round-trip CRLF notes
+ * instead of silently rewriting the whole file to LF (matches taskScanner.ts).
+ */
+export function detectNewline(content: string): "\r\n" | "\n" {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
 export type ManagedTaskStatus =
   | "todo"
   | "in-progress"
@@ -71,14 +79,17 @@ export function findManagedBlock(content: string): ManagedBlockLocation {
 
 export function insertEmptyManagedBlock(content: string): string {
   if (findManagedBlock(content).present) return content;
-  const trailing = content.endsWith("\n") ? "" : "\n";
-  const spacer = content.length === 0 || content.endsWith("\n\n") ? "" : "\n";
-  return `${content}${trailing}${spacer}${DELIMITER_START}\n${DELIMITER_END}\n`;
+  const nl = detectNewline(content);
+  const trailing = content.endsWith("\n") ? "" : nl;
+  const spacer =
+    content.length === 0 || content.endsWith(`${nl}${nl}`) ? "" : nl;
+  return `${content}${trailing}${spacer}${DELIMITER_START}${nl}${DELIMITER_END}${nl}`;
 }
 
 export function removeManagedBlock(content: string): string {
   const loc = findManagedBlock(content);
   if (!loc.present) return content;
+  const nl = detectNewline(content);
   const lines = content.split(/\r?\n/);
   const trailingNewline = content.endsWith("\n");
   // Remove delimiter lines and everything between, plus one trailing blank line if present.
@@ -88,8 +99,8 @@ export function removeManagedBlock(content: string): string {
   let trimBefore = 0;
   if (removeStart > 0 && lines[removeStart - 1].trim() === "") trimBefore = 1;
   lines.splice(removeStart - trimBefore, removeEnd - removeStart + 1 + trimBefore);
-  const out = lines.join("\n");
-  return trailingNewline && !out.endsWith("\n") ? `${out}\n` : out;
+  const out = lines.join(nl);
+  return trailingNewline && !out.endsWith("\n") ? `${out}${nl}` : out;
 }
 
 export function extractManagedBlockContent(content: string): string | null {
@@ -109,11 +120,13 @@ export function replaceManagedBlockContent(
     const withBlock = insertEmptyManagedBlock(content);
     return replaceManagedBlockContent(withBlock, innerTrimmed);
   }
+  const nl = detectNewline(content);
   const lines = content.split(/\r?\n/);
   const before = lines.slice(0, loc.startLine + 1);
   const after = lines.slice(loc.endLine);
-  const innerLines = innerTrimmed.length === 0 ? [] : innerTrimmed.split("\n");
-  return [...before, ...innerLines, ...after].join("\n");
+  const innerLines =
+    innerTrimmed.length === 0 ? [] : innerTrimmed.split(/\r?\n/);
+  return [...before, ...innerLines, ...after].join(nl);
 }
 
 export function parseGroupsFromContent(content: string): TaskGroup[] {

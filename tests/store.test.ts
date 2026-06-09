@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   type PluginData,
   type Reminder,
+  type ScrapedTask,
 } from "../src/types";
 
 test("markNotified records notification time without completing the reminder", async () => {
@@ -122,6 +123,223 @@ test("refuses hidden adapter mirror files that are not generated mirrors", async
   assert.equal(creates.length, 0);
 });
 
+test("snooze records the prior dueAt as snoozedFrom", async () => {
+  const priorDueAt = 1_000_000;
+  const { store, getSaved } = await createStore({ dueAt: priorDueAt });
+
+  await store.snooze("r1", 10);
+
+  const reminder = getSaved().reminders[0];
+  assert.equal(reminder.snoozedFrom, priorDueAt);
+  assert.equal(reminder.notified, false);
+  assert.equal(reminder.notifiedAt, undefined);
+  assert.equal(reminder.completedAt, undefined);
+  assert.ok(reminder.dueAt > priorDueAt);
+});
+
+test("updateReminder clears provenance/timestamps and rebuilds rawInput", async () => {
+  const { store, getSaved } = await createStore({
+    notified: true,
+    notifiedAt: 200,
+    completedAt: 300,
+    snoozedFrom: 400,
+    rawInput: "old text yesterday",
+  } as Reminder & { notifiedAt: number });
+
+  // Local midnight keeps formatMachineDate deterministic across time zones.
+  const newDue = new Date(2030, 0, 2, 9, 30).getTime();
+  await store.updateReminder("r1", "buy milk", newDue);
+
+  const reminder = getSaved().reminders[0] as Reminder & {
+    notifiedAt?: number;
+  };
+  assert.equal(reminder.text, "buy milk");
+  assert.equal(reminder.dueAt, newDue);
+  assert.equal(reminder.rawInput, "buy milk 2030-01-02 09:30");
+  assert.equal(reminder.notified, false);
+  assert.equal(reminder.notifiedAt, undefined);
+  assert.equal(reminder.completedAt, undefined);
+  assert.equal(reminder.snoozedFrom, undefined);
+});
+
+test("relinkTask remaps reminder source, ignored id, and ignored note", async () => {
+  const { store, getSaved } = await createStoreWithData({
+    reminders: [createReminder({ sourceTaskId: "old-id" })],
+    ignoredTaskIds: ["old-id"],
+    ignoredTaskNotes: { "old-id": "later" },
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  });
+
+  await store.relinkTask("old-id", "new-id");
+
+  const saved = getSaved();
+  assert.equal(saved.reminders[0].sourceTaskId, "new-id");
+  assert.deepEqual(saved.ignoredTaskIds, ["new-id"]);
+  assert.equal(saved.ignoredTaskNotes?.["new-id"], "later");
+  assert.equal(saved.ignoredTaskNotes?.["old-id"], undefined);
+});
+
+test("relinkTask is a no-op when oldId equals newId", async () => {
+  let saved: PluginData | null = null;
+  const initialData: PluginData = {
+    reminders: [createReminder({ sourceTaskId: "same-id" })],
+    ignoredTaskIds: ["same-id"],
+    ignoredTaskNotes: { "same-id": "later" },
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  };
+  const store = new ReminderStore(
+    createAppMock(),
+    async () => structuredClone(initialData),
+    async (data) => {
+      saved = structuredClone(data);
+    },
+  );
+  await store.init();
+
+  await store.relinkTask("same-id", "same-id");
+
+  // Early return -> no persist.
+  assert.equal(saved, null);
+});
+
+test("relinkTaskReferences remaps via legacy-id map and migrates ignored notes", async () => {
+  const { store, getSaved } = await createStoreWithData({
+    reminders: [createReminder({ sourceTaskId: "legacy-task" })],
+    ignoredTaskIds: ["legacy-ignored"],
+    ignoredTaskNotes: { "legacy-ignored": "skip this one" },
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  });
+
+  await store.relinkTaskReferences([
+    createTask({ id: "task-new", legacyIds: ["legacy-task"] }),
+    createTask({
+      id: "ignored-new",
+      legacyIds: ["legacy-ignored"],
+      text: "ignored task",
+    }),
+  ]);
+
+  const saved = getSaved();
+  assert.equal(saved.reminders[0].sourceTaskId, "task-new");
+  assert.deepEqual(saved.ignoredTaskIds, ["ignored-new"]);
+  assert.equal(saved.ignoredTaskNotes?.["ignored-new"], "skip this one");
+  assert.equal(saved.ignoredTaskNotes?.["legacy-ignored"], undefined);
+});
+
+test("relinkTaskReferences leaves a reminder whose sourceTaskId already matches a current task", async () => {
+  let saved: PluginData | null = null;
+  const initialData: PluginData = {
+    reminders: [createReminder({ sourceTaskId: "task-current" })],
+    ignoredTaskIds: [],
+    ignoredTaskNotes: {},
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  };
+  const store = new ReminderStore(
+    createAppMock(),
+    async () => structuredClone(initialData),
+    async (data) => {
+      saved = structuredClone(data);
+    },
+  );
+  await store.init();
+
+  // The reminder's sourceTaskId IS a current task id; the fuzzy fallback must
+  // never run, so no persist happens (saved stays null) and the id is intact.
+  await store.relinkTaskReferences([
+    createTask({ id: "task-current", text: "call mom and dad about dinner" }),
+  ]);
+
+  assert.equal(saved, null);
+});
+
+test("relinkTaskReferences does not mislink a short reminder via substring text match", async () => {
+  // Legacy id no longer resolves and has no legacyIds entry; the file holds a
+  // task whose text merely CONTAINS the reminder text. Equality (not includes)
+  // must prevent a mislink, so the stale sourceTaskId is left unchanged.
+  let saved: PluginData | null = null;
+  const initialData: PluginData = {
+    reminders: [
+      createReminder({
+        text: "call mom",
+        sourceTaskId: "Inbox.md:3:checkbox:call mom",
+      }),
+    ],
+    ignoredTaskIds: [],
+    ignoredTaskNotes: {},
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  };
+  const store = new ReminderStore(
+    createAppMock(),
+    async () => structuredClone(initialData),
+    async (data) => {
+      saved = structuredClone(data);
+    },
+  );
+  await store.init();
+
+  await store.relinkTaskReferences([
+    createTask({
+      id: "task-longer",
+      filePath: "Inbox.md",
+      text: "call mom and dad about the trip",
+    }),
+  ]);
+
+  // No exact-identity match -> no rebind -> nothing persisted.
+  assert.equal(saved, null);
+});
+
+test("relinkTaskReferences rebinds a legacy reminder on exact whole-task identity", async () => {
+  const { store, getSaved } = await createStoreWithData({
+    reminders: [
+      createReminder({
+        text: "call mom",
+        sourceTaskId: "Inbox.md:3:checkbox:call mom",
+      }),
+    ],
+    ignoredTaskIds: [],
+    ignoredTaskNotes: {},
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  });
+
+  await store.relinkTaskReferences([
+    createTask({ id: "task-exact", filePath: "Inbox.md", text: "call mom" }),
+  ]);
+
+  assert.equal(getSaved().reminders[0].sourceTaskId, "task-exact");
+});
+
+test("relinkTaskReferences bails when more than one task in the file matches", async () => {
+  let saved: PluginData | null = null;
+  const initialData: PluginData = {
+    reminders: [
+      createReminder({
+        text: "call mom",
+        sourceTaskId: "Inbox.md:3:checkbox:call mom",
+      }),
+    ],
+    ignoredTaskIds: [],
+    ignoredTaskNotes: {},
+    settings: { ...DEFAULT_SETTINGS, mirrorToMarkdown: false },
+  };
+  const store = new ReminderStore(
+    createAppMock(),
+    async () => structuredClone(initialData),
+    async (data) => {
+      saved = structuredClone(data);
+    },
+  );
+  await store.init();
+
+  await store.relinkTaskReferences([
+    createTask({ id: "task-a", filePath: "Inbox.md", text: "call mom" }),
+    createTask({ id: "task-b", filePath: "Inbox.md", text: "call mom" }),
+  ]);
+
+  // Ambiguous (2 equal matches) -> bail rather than guess -> no persist.
+  assert.equal(saved, null);
+});
+
 async function createStore(
   reminderPatch: Partial<Reminder> = {},
   options: {
@@ -203,6 +421,45 @@ function createReminder(patch: Partial<Reminder> = {}): Reminder {
     dueAt: Date.now() + 60_000,
     createdAt: Date.now(),
     notified: false,
+    ...patch,
+  };
+}
+
+async function createStoreWithData(initialData: PluginData) {
+  let saved: PluginData | null = null;
+  const store = new ReminderStore(
+    createAppMock(),
+    async () => structuredClone(initialData),
+    async (data) => {
+      saved = structuredClone(data);
+    },
+  );
+
+  await store.init();
+
+  return {
+    store,
+    getSaved: () => {
+      assert.ok(saved);
+      return saved;
+    },
+  };
+}
+
+function createTask(patch: Partial<ScrapedTask> = {}): ScrapedTask {
+  return {
+    id: "task-current",
+    legacyIds: [],
+    text: "call mom",
+    contextNotes: [],
+    contextNoteLines: [],
+    filePath: "Inbox.md",
+    line: 1,
+    kind: "checkbox",
+    status: "todo",
+    completed: false,
+    category: "",
+    project: "",
     ...patch,
   };
 }

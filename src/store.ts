@@ -242,9 +242,23 @@ export class ReminderStore {
     let changed = false;
     const taskIds = new Set(tasks.map((task) => task.id));
     const legacyIdMap = new Map<string, string>();
+    // Index tasks by file path with precomputed identity text once, so the
+    // legacy fallback only scans tasks in the matching file instead of the
+    // whole vault per orphaned reminder (was O(reminders x tasks)).
+    const tasksByFilePath = new Map<string, LegacyMatchCandidate[]>();
     for (const task of tasks) {
       for (const legacyId of task.legacyIds) {
         legacyIdMap.set(legacyId, task.id);
+      }
+      const bucket = tasksByFilePath.get(task.filePath);
+      const candidate: LegacyMatchCandidate = {
+        id: task.id,
+        identityText: normalizeIdentityText(task.text),
+      };
+      if (bucket) {
+        bucket.push(candidate);
+      } else {
+        tasksByFilePath.set(task.filePath, [candidate]);
       }
     }
 
@@ -253,7 +267,7 @@ export class ReminderStore {
         continue;
       const nextTaskId =
         legacyIdMap.get(reminder.sourceTaskId) ??
-        findLegacyReminderTask(reminder, tasks)?.id;
+        findLegacyReminderTask(reminder, tasksByFilePath);
       if (!nextTaskId || nextTaskId === reminder.sourceTaskId) continue;
       reminder.sourceTaskId = nextTaskId;
       changed = true;
@@ -314,8 +328,11 @@ export class ReminderStore {
       this.mirrorRefusedPaths.delete(path);
       await this.app.vault.process(existing, () => body);
     } else if (await this.writeAdapterMirrorFile(path, body)) {
+      // The mirror path is present on disk but absent from Obsidian's index
+      // (getAbstractFileByPath returned null); writeAdapterMirrorFile handled it.
       return;
     } else {
+      // Truly new file: create through the Vault API (serialized, cache-aware).
       await this.app.vault.create(path, body);
     }
   }
@@ -329,6 +346,19 @@ export class ReminderStore {
     }
   }
 
+  /**
+   * Documented Vault-API exception (portal rule: prefer Vault over Adapter).
+   *
+   * This is reached only when getAbstractFileByPath(path) returned null yet a
+   * file exists on disk — present-but-unindexed, e.g. written by an external
+   * tool or sync before Obsidian re-indexed it. The Vault API cannot serve
+   * this case cleanly: vault.create(path) rejects because the file already
+   * exists on disk, and vault.process()/cachedRead() require a TFile that the
+   * index does not yet provide. So we fall back to the Adapter API to read the
+   * existing body (to honor the same overwrite guard as the indexed path) and
+   * write the mirror. Returns true if it handled the path, false if the file
+   * was not on disk after all (let the caller vault.create it).
+   */
   private async writeAdapterMirrorFile(
     path: string,
     body: string,
@@ -517,25 +547,41 @@ function formatMachineDate(ms: number): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
+interface LegacyMatchCandidate {
+  id: string;
+  identityText: string;
+}
+
+/**
+ * Resolve an orphaned reminder's stale legacy sourceTaskId to a current task
+ * id by whole-task identity. Only candidates in the reminder's original file
+ * are considered (the caller indexes tasks by filePath). The match requires
+ * exact normalized-text equality — a previous substring (includes) match could
+ * mislink a short reminder ("call mom") to the first longer task that merely
+ * contained it. If more than one task in the file matches, the result is
+ * ambiguous and we bail rather than guess, returning null.
+ */
 function findLegacyReminderTask(
   reminder: Reminder,
-  tasks: ScrapedTask[],
-): ScrapedTask | null {
+  tasksByFilePath: Map<string, LegacyMatchCandidate[]>,
+): string | null {
   if (!reminder.sourceTaskId) return null;
   const legacy = parseLegacyTaskId(reminder.sourceTaskId);
   if (!legacy) return null;
+  const candidates = tasksByFilePath.get(legacy.filePath);
+  if (!candidates) return null;
   const reminderText = normalizeIdentityText(reminder.text);
-  return (
-    tasks.find((task) => {
-      if (task.filePath !== legacy.filePath) return false;
-      const taskText = normalizeIdentityText(task.text);
-      const legacyText = normalizeIdentityText(legacy.text ?? "");
-      return (
-        (reminderText !== "" && taskText.includes(reminderText)) ||
-        (legacyText !== "" && taskText.includes(legacyText))
-      );
-    }) ?? null
-  );
+  const legacyText = normalizeIdentityText(legacy.text ?? "");
+  let match: string | null = null;
+  for (const candidate of candidates) {
+    const isMatch =
+      (reminderText !== "" && candidate.identityText === reminderText) ||
+      (legacyText !== "" && candidate.identityText === legacyText);
+    if (!isMatch) continue;
+    if (match !== null && match !== candidate.id) return null;
+    match = candidate.id;
+  }
+  return match;
 }
 
 function parseLegacyTaskId(
