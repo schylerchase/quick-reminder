@@ -332,3 +332,101 @@ test("setCheckboxStatus relocates the task WITH its context-note block intact (F
   assert.equal(lines.filter((l) => l.includes("ship it")).length, 1);
   assert.equal(lines.filter((l) => l.includes("subtask note")).length, 1);
 });
+
+test("setCheckboxText rewrites task text, preserves checkbox marker, leaves context notes intact (F07)", async () => {
+  const file = new FakeFile("a.md");
+  let content = ["- [x] old title", "  - context note", "- [ ] other"].join(
+    "\n",
+  );
+  const scanner = new TaskScanner(
+    makeProcessApp(file, () => content, (v) => (content = v)) as never,
+  );
+  const task = checkboxTask(file, "old title", 1);
+
+  const updated = await scanner.setCheckboxText(task, "new title");
+
+  assert.notEqual(updated, null);
+  assert.equal(updated?.text, "new title");
+  assert.equal(
+    content,
+    ["- [x] new title", "  - context note", "- [ ] other"].join("\n"),
+  );
+});
+
+test("appendTask creates Tasks and To Do sections then inserts the task (F07)", async () => {
+  const file = new FakeFile("a.md");
+  let content = "# Notes\n\nSome text.";
+  const scanner = new TaskScanner(
+    makeProcessApp(file, () => content, (v) => (content = v)) as never,
+  );
+
+  const task = await scanner.appendTask(file.path, "buy milk");
+
+  assert.notEqual(task, null);
+  assert.equal(task?.text, "buy milk");
+  assert.equal(
+    content,
+    [
+      "# Notes",
+      "",
+      "Some text.",
+      "",
+      "## Tasks",
+      "",
+      "### To Do",
+      "",
+      "- [ ] buy milk",
+    ].join("\n"),
+  );
+});
+
+test("appendTaskContextNotes splices new notes after the last existing context note, leaving neighbours intact (F07)", async () => {
+  const file = new FakeFile("a.md");
+  let content = [
+    "- [ ] task text",
+    "  - existing note",
+    "- [ ] other task",
+  ].join("\n");
+  const scanner = new TaskScanner(
+    makeProcessApp(file, () => content, (v) => (content = v)) as never,
+  );
+  const task = checkboxTask(file, "task text", 1);
+
+  const ok = await scanner.appendTaskContextNotes(task, ["new note"]);
+
+  assert.equal(ok, true);
+  assert.equal(
+    content,
+    [
+      "- [ ] task text",
+      "  - existing note",
+      "  - new note",
+      "- [ ] other task",
+    ].join("\n"),
+  );
+});
+
+test("replaceTaskContextNotes swaps the entire old note block for new notes, neighbours intact (F07)", async () => {
+  const file = new FakeFile("a.md");
+  let content = [
+    "- [ ] task text",
+    "  - old note one",
+    "  - old note two",
+    "- [ ] other task",
+  ].join("\n");
+  const scanner = new TaskScanner(
+    makeProcessApp(file, () => content, (v) => (content = v)) as never,
+  );
+  const task = checkboxTask(file, "task text", 1, {
+    contextNotes: ["old note one", "old note two"],
+    contextNoteLines: ["  - old note one", "  - old note two"],
+  });
+
+  const ok = await scanner.replaceTaskContextNotes(task, ["new note"]);
+
+  assert.equal(ok, true);
+  assert.equal(
+    content,
+    ["- [ ] task text", "  - new note", "- [ ] other task"].join("\n"),
+  );
+});
