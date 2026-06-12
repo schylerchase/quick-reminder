@@ -21,7 +21,7 @@ import {
 import { runReminderActionWorkflow } from "./lib/reminderActionWorkflow";
 import { runExistingTaskReminderWorkflow } from "./lib/taskReminderWorkflow";
 import { saveScheduledReminder } from "./reminderTransaction";
-import { formatInputDate } from "./lib/dateFormat";
+import { renderReminderEditRow } from "./lib/reminderEditRow";
 
 export class QuickCaptureModal extends Modal {
   private inputEl!: HTMLInputElement;
@@ -423,26 +423,20 @@ export class ReminderListModal extends Modal {
   }
 
   private renderEditRow(parent: HTMLElement, reminder: Reminder): void {
-    const editor = parent.createDiv({ cls: "qr-edit-form qr-list-edit-form" });
-    const fields = editor.createDiv({ cls: "qr-edit-fields" });
-    const textInput = fields.createEl("input", { type: "text", cls: "qr-edit-input" });
-    textInput.value = reminder.text;
-
-    const dueInput = fields.createEl("input", {
-      type: "datetime-local",
-      cls: "qr-edit-input",
-    });
-    dueInput.value = formatInputDate(reminder.dueAt);
-
-    const actions = editor.createDiv({ cls: "qr-edit-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-row-btn" }).onclick = () => {
-      this.editingId = null;
-      this.onOpen();
-    };
-    const saveBtn = actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" });
+    const { textInput, dueInput, saveButton } = renderReminderEditRow(
+      parent,
+      reminder,
+      {
+        formClass: "qr-list-edit-form",
+        onCancel: () => {
+          this.editingId = null;
+          this.onOpen();
+        },
+      },
+    );
     let isRunning = false;
-    const idleText = saveBtn.textContent ?? "";
-    saveBtn.onclick = () => {
+    const idleText = saveButton.textContent ?? "";
+    saveButton.onclick = () => {
       void this.saveEdit(
         reminder,
         textInput.value,
@@ -451,14 +445,12 @@ export class ReminderListModal extends Modal {
           isRunning: () => isRunning,
           setRunning: (running) => {
             isRunning = running;
-            saveBtn.disabled = running;
-            saveBtn.setText(running ? "Saving..." : idleText);
+            saveButton.disabled = running;
+            saveButton.setText(running ? "Saving..." : idleText);
           },
         },
       );
     };
-
-    window.setTimeout(() => textInput.focus(), 0);
   }
 
   private async saveEdit(

@@ -45,7 +45,7 @@ import {
 } from "./lib/dashboardState";
 import { runDashboardOpenWorkflow } from "./lib/dashboardOpenWorkflow";
 import { runDashboardScanWorkflow } from "./lib/dashboardScanWorkflow";
-import { formatInputDate } from "./lib/dateFormat";
+import { renderReminderEditRow } from "./lib/reminderEditRow";
 import { getStarterBoardOpenFailedNotice } from "./lib/starterBoardMessages";
 import { runStarterBoardEntryAction } from "./lib/starterBoardWorkflow";
 import { filterTasksByQuery, getTaskSearchText } from "./lib/task-search";
@@ -881,24 +881,19 @@ export class ReminderView extends ItemView {
   }
 
   private renderEditRow(parent: HTMLElement, r: Reminder): void {
-    const editor = parent.createDiv({ cls: "qr-edit-form" });
-    const fields = editor.createDiv({ cls: "qr-edit-fields" });
-    const textInput = fields.createEl("input", { type: "text", cls: "qr-edit-input" });
-    textInput.value = r.text;
-
-    const dueInput = fields.createEl("input", { type: "datetime-local", cls: "qr-edit-input" });
-    dueInput.value = formatInputDate(r.dueAt);
-
-    const actions = editor.createDiv({ cls: "qr-edit-actions" });
-    actions.createEl("button", { text: "Cancel", cls: "qr-row-btn" }).onclick = () => {
-      this.editingId = null;
-      void this.render();
-    };
-
-    const saveBtn = actions.createEl("button", { text: "Save", cls: "qr-row-btn qr-done-btn" });
-    const idleText = saveBtn.textContent ?? "";
+    const { textInput, dueInput, saveButton } = renderReminderEditRow(
+      parent,
+      r,
+      {
+        onCancel: () => {
+          this.editingId = null;
+          void this.render();
+        },
+      },
+    );
+    const idleText = saveButton.textContent ?? "";
     let isRunning = false;
-    saveBtn.onclick = async () => {
+    saveButton.onclick = async () => {
       const text = textInput.value.trim();
       const dueAt = new Date(dueInput.value).getTime();
       if (!text || Number.isNaN(dueAt)) {
@@ -922,14 +917,12 @@ export class ReminderView extends ItemView {
           isRunning: () => isRunning,
           setRunning: (running) => {
             isRunning = running;
-            saveBtn.disabled = running;
-            saveBtn.setText(running ? "Saving..." : idleText);
+            saveButton.disabled = running;
+            saveButton.setText(running ? "Saving..." : idleText);
           },
         },
       );
     };
-
-    window.setTimeout(() => textInput.focus(), 0);
   }
 
   private wireReminderActionButton(

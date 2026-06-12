@@ -32,6 +32,7 @@ const testEntries = [
   "tests/taskStatusWrite.test.ts",
   "tests/reminderMessages.test.ts",
   "tests/reminderActionWorkflow.test.ts",
+  "tests/reminderEditRow.test.ts",
   "tests/reminderManager.test.ts",
   "tests/modalSubmit.test.ts",
   "tests/taskTarget.test.ts",

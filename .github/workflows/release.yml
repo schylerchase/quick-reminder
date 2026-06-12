@@ -24,8 +24,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build plugin
-        run: npm run build
+      - name: Package release assets
+        run: npm run release:package
 
       - name: Verify tag matches manifest version
         env:
@@ -34,9 +34,10 @@ jobs:
           node <<'NODE'
           const fs = require("fs");
           const tag = process.env.TAG_NAME;
+          const normalizedTag = tag.replace(/^v/, "");
           const version = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
 
-          if (tag !== version) {
+          if (normalizedTag !== version) {
             console.error(`Release tag "${tag}" does not match manifest.json version "${version}".`);
             process.exit(1);
           }
@@ -46,19 +47,26 @@ jobs:
 
       - name: Verify release assets
         run: |
-          test -f main.js || { echo "::error file=main.js::main.js missing after build"; exit 1; }
-          test -f manifest.json || { echo "::error file=manifest.json::manifest.json missing after build"; exit 1; }
+          test -f dist/release/main.js || { echo "::error file=dist/release/main.js::main.js missing after package"; exit 1; }
+          test -f dist/release/manifest.json || { echo "::error file=dist/release/manifest.json::manifest.json missing after package"; exit 1; }
+          test -f dist/release/versions.json || { echo "::error file=dist/release/versions.json::versions.json missing after package"; exit 1; }
+          test -f dist/release/styles.css || { echo "::error file=dist/release/styles.css::styles.css missing after package"; exit 1; }
+          test -f dist/release/install-macos.command || { echo "::error file=dist/release/install-macos.command::macOS installer missing after package"; exit 1; }
+          test -f dist/release/install-windows.ps1 || { echo "::error file=dist/release/install-windows.ps1::Windows installer missing after package"; exit 1; }
+          test -f dist/quick-reminder.zip || { echo "::error file=dist/quick-reminder.zip::quick-reminder.zip missing after package"; exit 1; }
 
       - name: Collect release assets
         id: assets
         run: |
           {
             echo "files<<EOF"
-            echo "main.js"
-            echo "manifest.json"
-            if [ -f styles.css ]; then
-              echo "styles.css"
-            fi
+            echo "dist/release/main.js"
+            echo "dist/release/manifest.json"
+            echo "dist/release/versions.json"
+            echo "dist/release/styles.css"
+            echo "dist/release/install-macos.command"
+            echo "dist/release/install-windows.ps1"
+            echo "dist/quick-reminder.zip"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 

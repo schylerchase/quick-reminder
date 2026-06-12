@@ -359,6 +359,7 @@ src/
   types.ts       # Shared types + defaults
   view.ts        # Reminder manager + task dashboard sidebar view
   projectPlannerModal.ts # Project Planner modal UI
+  lib/reminderEditRow.ts # Shared reminder edit-row form scaffold
   lib/projectPlanner.ts  # Project Planner parse/render/validation helpers
 ```
 
@@ -371,8 +372,8 @@ src/
    ```
 3. Push a tag:
    ```bash
-   git tag v0.1.1
-   git push origin v0.1.1
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
 4. GitHub Actions publishes a release containing:
    - `main.js`
