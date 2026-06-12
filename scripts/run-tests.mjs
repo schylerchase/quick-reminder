@@ -40,6 +40,7 @@ const testEntries = [
   "tests/managedTasksBlock.test.ts",
   "tests/taskSectionMessages.test.ts",
   "tests/managedTasksOps.test.ts",
+  "tests/mobileViewport.test.ts",
   "tests/ribbonOrder.test.ts",
   "tests/starterBoard.test.ts",
   "tests/starterBoardWorkflow.test.ts",

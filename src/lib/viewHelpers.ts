@@ -44,10 +44,7 @@ export type TaskPhaseNoteGroup = {
 export function shouldUseMobileTaskViewport(): boolean {
   if (
     typeof document !== "undefined" &&
-    (
-      document.body.classList.contains("is-mobile") ||
-      document.body.classList.contains("is-phone")
-    )
+    document.body.classList.contains("is-phone")
   ) {
     return true;
   }
