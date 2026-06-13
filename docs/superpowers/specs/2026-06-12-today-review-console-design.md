@@ -1,10 +1,10 @@
-# Today / Review Console Design
+# Daily Cockpit / Review Console Design
 
 ## Status
 
-Approved direction: `Where Am I? + Today Strips`.
+Approved direction: `Daily Cockpit MVP first`.
 
-Quick Reminder should open by telling the user where they are in the vault, then show what needs attention from that context. The design keeps source notes as truth, shows provenance before action, and adds recovery affordances around note mutations.
+Quick Reminder should open into a small daily execution cockpit: what is due, what matters in the current note or folder, and what needs a quick review. The broader provenance and recovery layer still matters, but it should follow after the opening experience feels obvious enough for daily use.
 
 ## Problem
 
@@ -12,29 +12,59 @@ Quick Reminder 1.0 has reliable reminders, task scanning, source-note actions, P
 
 The new first screen must answer three questions immediately:
 
+- What needs attention today?
 - Where am I working?
-- What needs attention from here?
-- What will Quick Reminder change if I click this action?
+- What is the next obvious action?
 
 ## Anti-Slop Principles
 
 - Do not add AI ranking, fake priority scores, Kanban decoration, or a separate task database.
 - Source notes remain the truth. Dashboard state is a view over Markdown, reminders, ignored task records, and local plugin settings.
 - Every task-like item shows its source path, heading/category when known, and line number when known.
-- Actions that mutate source notes explain the target and change before they run.
-- Recovery is visible near the action surface, not hidden in documentation.
+- Source-changing actions should stay visibly tied to their source, even before the full mutation preview layer ships.
+- Recovery should become visible near the action surface in the follow-up safety slice, not hidden in documentation.
 - First-run guidance should be operational, not marketing copy.
+
+## MVP Scope
+
+The first implementation slice is `Daily Cockpit`.
+
+Ship now:
+
+- `Today` strip for overdue and due-today work
+- `Current context` strip for active note, folder, or last known context
+- `Needs review` strip for stale or hidden work that should not disappear forever
+- source provenance on every cockpit item
+- direct paths into the existing full dashboard
+- desktop, phone, and iPad-width layout coverage
+
+Defer:
+
+- mutation preview modals
+- undo/recovery log
+- richer ignored-task aging and migrations
+- AI ranking or prioritization
 
 ## First-Open Experience
 
-The default dashboard top section is `Where Am I?`.
+The default dashboard top section is `Daily Cockpit`.
+
+The section order is fixed:
+
+1. `Today`
+2. `Current context`
+3. `Needs review`
+
+This order should not depend on AI or hidden scoring. It mirrors the daily habit: handle urgent work, then continue where you are, then clean up anything stale.
+
+Above the strips, show a compact `Where am I?` line. This is orientation, not a separate panel competing with Today.
 
 When a Markdown note is active, the header shows:
 
 - active note path
 - parent folder or selected folder context
-- counts for current note tasks, folder tasks, overdue reminders, dated tasks, stale in-progress tasks, and ignored tasks due for review
-- quick scope actions: `Work this note`, `Folder`, `Whole vault`
+- small counts for today, current note, current folder, and needs review
+- quick scope actions: `This note`, `Folder`, `Whole vault`
 
 When no Markdown note is active, the header shows:
 
@@ -44,17 +74,17 @@ When no Markdown note is active, the header shows:
 - action to scan whole vault
 - action to create/open starter dashboard
 
-The goal is to orient the user before asking them to process a list.
+The goal is to orient the user and make the first next action obvious before asking them to process the full dashboard.
 
 ## Today Console
 
-Below `Where Am I?`, show three compact strips:
+Show three compact strips:
 
-1. `Due now`
+1. `Today`
    - overdue reminders
    - reminders due today
    - dated tasks whose text parses to today or earlier
-2. `This context`
+2. `Current context`
    - open tasks from current note first
    - then current folder tasks if note count is low
    - in-progress tasks from current note/folder
@@ -63,7 +93,7 @@ Below `Where Am I?`, show three compact strips:
    - ignored tasks older than the review window
    - tasks with dates in the past but no linked reminder
 
-Each strip should show a small number of items, with a clear path to expand into the existing full dashboard sections. The full vault task dashboard remains available below these strips or through the scope control.
+Each strip should show at most five items on desktop and at most three on phone. Each strip has a clear `View all` path into the existing dashboard scope or filtered section. The full vault task dashboard remains below the cockpit.
 
 ## Data Model
 
@@ -72,7 +102,7 @@ Add a pure view-model layer before rendering:
 ```ts
 interface ReviewConsoleModel {
   context: ReviewContext;
-  dueNow: ConsoleItem[];
+  today: ConsoleItem[];
   currentContext: ConsoleItem[];
   needsReview: ConsoleItem[];
   counts: ReviewCounts;
@@ -108,13 +138,13 @@ The model should be created in `src/lib/todayReviewConsole.ts` or similar, with 
 
 Rules must be deterministic and explainable:
 
-- `Due now` includes reminders where `dueAt <= endOfToday`, overdue reminders first.
+- `Today` includes reminders where `dueAt <= endOfToday`, overdue reminders first.
 - Dated tasks use the existing reminder parser. A task appears as dated only when parsing returns a concrete future or past date.
-- `This context` uses current note tasks before folder tasks. If there is no active Markdown note, it uses the last known context and labels that clearly.
+- `Current context` uses current note tasks before folder tasks. If there is no active Markdown note, it uses the last known context and labels that clearly.
 - Stale in-progress starts with tasks marked `in-progress`; MVP can use existing inline metadata when present and otherwise fall back to status only. Do not infer hidden start dates if the source does not contain one.
 - Ignored review uses stored ignored task IDs and ignored notes. MVP can use a simple review bucket first; adding per-ignore timestamps can be a later storage migration if needed.
 
-If an item qualifies for multiple strips, use the first matching strip in this order: `Due now`, `This context`, `Needs review`.
+If an item qualifies for multiple strips, use the first matching strip in this order: `Today`, `Current context`, `Needs review`.
 
 ## Provenance
 
@@ -130,7 +160,7 @@ When heading is unknown, show file and line. When line is unavailable for remind
 
 ## Mutation Preview
 
-Risky source-note writes get a lightweight preview before mutation:
+Risky source-note writes get a lightweight preview before mutation in the follow-up safety slice:
 
 - `Done`
 - `To do`
@@ -147,13 +177,13 @@ Preview content should include:
 - after line or block
 - explicit note when context notes/subtasks move with the task
 
-Low-risk reminder-only actions such as snooze or restore can stay single-click, but they still need visible source or reminder identity.
+For the Daily Cockpit MVP, these actions can keep the existing behavior, but cockpit items must show source provenance beside the action controls so the user understands what note will change.
 
 ## Recovery / Undo Log
 
 Add a recent mutation log focused on recovery, not auditing.
 
-MVP:
+Follow-up safety slice:
 
 - Keep the most recent source-note mutation in memory and plugin data.
 - Show a small `Last change` row after a mutation.
@@ -173,34 +203,34 @@ Undo must be conservative: if the file changed since the mutation, do not apply 
 Desktop main dashboard:
 
 1. Header: `Quick Reminder`
-2. `Where Am I?` context panel
-3. Three console strips: `Due now`, `This context`, `Needs review`
+2. Compact `Where am I?` context line
+3. Three cockpit strips: `Today`, `Current context`, `Needs review`
 4. Existing filters and full task sections
-5. History / recent mutations
+5. History / recent mutations, after the safety slice ships
 
 Sidebar:
 
-- Keep the context panel compact.
-- Show console strips as stacked sections.
+- Keep the context line compact.
+- Show cockpit strips as stacked sections.
 - Prefer two primary actions per item, then a `More` menu or inline wrap for secondary actions.
 
 Mobile:
 
 - Preserve existing compact task-card behavior.
-- Context panel stays first.
+- Context line stays first.
 - Console items are collapsed by default after title, reason, and source.
 - Touch targets stay at least 44px.
-- Mutation preview uses a modal or bottom-sheet style surface with clear `Cancel` and action buttons.
+- Mutation preview, after the safety slice ships, uses a modal or bottom-sheet style surface with clear `Cancel` and action buttons.
 
 ## Empty, Error, and Degraded States
 
 - No active note: show last context and whole-vault action.
-- No due items: show `Nothing due in this context` and keep `This context` visible.
+- No due items: show `Nothing due today` and keep `Current context` visible.
 - No current context tasks: show `No tasks in this note` with `Folder` and `Whole vault`.
 - Scan failed: keep existing data visible if available, show scan failure, and offer `Scan`.
 - Source missing: show the item as unavailable, disable mutation actions, keep `Show source` if the file can still be opened.
-- Preview cannot be built: block risky mutation and open the source note.
-- Undo unavailable: explain that the source changed and offer to show the source.
+- Preview cannot be built, after the safety slice ships: block risky mutation and open the source note.
+- Undo unavailable, after the safety slice ships: explain that the source changed and offer to show the source.
 
 ## Implementation Boundaries
 
@@ -211,7 +241,7 @@ MVP implementation should:
 - add a pure console model helper under `src/lib`
 - test triage and provenance rules with unit tests
 - add small renderer methods to `ReminderView`
-- wrap existing mutation workflows with preview/recovery where needed
+- reuse existing mutation workflows without adding preview/recovery yet
 - keep existing dashboard filters, scope settings, and task actions working
 
 Avoid new dependencies. Use Obsidian-native variables and existing Quick Reminder CSS patterns.
@@ -221,44 +251,23 @@ Avoid new dependencies. Use Obsidian-native variables and existing Quick Reminde
 Unit tests:
 
 - builds context from active note, folder, and vault scopes
-- places overdue reminders and today reminders in `Due now`
+- places overdue reminders and today reminders in `Today`
 - places current note tasks before folder tasks
 - places stale in-progress and ignored tasks in `Needs review`
 - avoids duplicate items across strips
 - formats source provenance consistently
-- blocks undo when expected after text no longer matches source
+- handles no active note with last-context and whole-vault actions
+- preserves phone compact behavior and iPad-width non-phone layout
 
 Workflow tests:
 
-- preview for `Done` shows before/after source line
-- confirmed `Done` writes the source and records last mutation
-- undo restores the prior source line when safe
-- delete preview includes context-note/subtask movement or removal
-- source-missing mutation fails with recovery notice
+- dashboard `View all` actions move from cockpit strips to the existing full dashboard sections
+- source-missing cockpit items disable mutation actions and keep source recovery visible
 
 UI QA:
 
-- desktop main dashboard first viewport shows context panel and three strips
+- desktop main dashboard first viewport shows context line and three cockpit strips
 - narrow sidebar wraps actions without overflow
-- mobile console cards are reachable and expandable
-- mutation preview modal is usable at phone width
+- mobile cockpit cards are reachable and expandable
+- iPad-width `is-mobile` without `is-phone` does not use the phone-compressed task layout
 - accessibility scan covers focus order and button labels
-
-## MVP Scope
-
-Ship `Where Am I? + Today Strips` first:
-
-- context panel
-- due/current/review strips
-- deterministic triage helper
-- source provenance on every console item
-- preview for checkbox status changes and delete
-- last mutation undo for checkbox status changes
-
-Defer:
-
-- multi-entry recovery log
-- per-ignore review timestamps
-- full one-task-at-a-time review mode
-- configurable review windows
-- AI or priority ranking
