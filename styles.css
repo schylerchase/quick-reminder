@@ -685,6 +685,58 @@
 }
 .qr-view-secondary-btn:hover { background: var(--background-modifier-hover); }
 
+.qr-daily-console {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 0.6em;
+  margin-bottom: 0.8em;
+}
+
+.qr-daily-panel {
+  min-width: 0;
+  padding: 0.72em 0.8em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.qr-daily-panel-primary {
+  border-color: color-mix(in srgb, var(--interactive-accent) 36%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-secondary));
+}
+
+.qr-daily-kicker {
+  color: var(--text-muted);
+  font-size: 0.68em;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.qr-daily-title {
+  margin-top: 0.22em;
+  color: var(--text-normal);
+  font-size: 0.98em;
+  font-weight: 650;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.qr-daily-meta {
+  margin-top: 0.24em;
+  color: var(--text-muted);
+  font-size: 0.76em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.qr-daily-action {
+  margin-top: 0.55em;
+  width: 100%;
+  justify-content: center;
+}
+
 .nav-folder-title.qr-selected-task-folder {
   background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
   color: var(--text-normal);
@@ -1518,6 +1570,16 @@
 }
 
 @container (max-width: 720px) {
+  .qr-daily-console {
+    gap: 0.5em;
+    margin-bottom: 0.7em;
+  }
+  .qr-daily-panel {
+    padding: 0.62em 0.65em;
+  }
+  .qr-daily-title {
+    font-size: 0.92em;
+  }
   .qr-task-note-head {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1643,6 +1705,9 @@
 }
 
 @container (max-width: 560px) {
+  .qr-daily-console {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .qr-view-dashboard .qr-task-toolbar {
     grid-template-columns: minmax(0, 1fr);
   }

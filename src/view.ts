@@ -171,11 +171,13 @@ import {
   getDashboardSectionClassNames,
   getEmptyScrapedText,
   getEmptyText,
+  getPathBasename,
   getPhaseAccentHue,
   getSummaryText,
   getTaskContextSummaryText,
   getTaskKindBadgeText,
   getTaskPriorityRank,
+  getTaskSourceLineLabel,
   getTaskStatusClassName,
   getTaskStatusTitle,
   getTasksPluginApi,
@@ -409,7 +411,7 @@ export class ReminderView extends ItemView {
 
     const header = container.createDiv({ cls: "qr-view-header" });
     const title = header.createDiv({ cls: "qr-view-title" });
-      title.createEl("h3", { text: "Task Manager" });
+    title.createEl("h3", { text: "Today" });
     title.createDiv({
       text: getSummaryText(overdue.length, upcoming.length, activeScraped.length, this.taskScope, activeFilePath, folderPath),
       cls: "qr-view-summary",
@@ -450,14 +452,22 @@ export class ReminderView extends ItemView {
       sourceFilter: this.sourceFilter,
     });
 
-    this.renderStats(
+    const currentFileActiveTasks = activeFilePath
+      ? this.scrapedTasks.filter((task) =>
+        task.filePath === activeFilePath &&
+        !task.completed &&
+        !ignoredTaskIds.has(task.id),
+      )
+      : [];
+    this.renderDailyConsole(
       container as HTMLElement,
+      activeFilePath,
+      folderPath,
+      currentFileActiveTasks,
+      activeScraped,
       overdue.length,
       upcoming.length,
-      activeScraped.length,
-      ignoredScraped.length,
     );
-    this.renderTaskToolbar(container as HTMLElement, unignoredScraped, filteredScraped.length);
 
     if (shouldShowFirstRunPanel) {
       this.renderFirstRunActions(container as HTMLElement);
@@ -466,11 +476,75 @@ export class ReminderView extends ItemView {
     if (overdue.length > 0) {
       this.renderSection(container as HTMLElement, "Overdue", overdue, false);
     }
+    this.renderScrapedSection(container as HTMLElement, "Now / Next", activeScraped, unignoredScraped.filter((task) => !task.completed).length, false, {}, scopedEmptyTaskAction);
+    this.renderTaskToolbar(container as HTMLElement, unignoredScraped, filteredScraped.length);
+    this.renderStats(
+      container as HTMLElement,
+      overdue.length,
+      upcoming.length,
+      activeScraped.length,
+      ignoredScraped.length,
+    );
     this.renderSection(container as HTMLElement, "Upcoming", upcoming, false);
-    this.renderScrapedSection(container as HTMLElement, "Vault tasks", activeScraped, unignoredScraped.filter((task) => !task.completed).length, false, {}, scopedEmptyTaskAction);
     this.renderScrapedSection(container as HTMLElement, "Completed vault tasks", completedScraped, unignoredScraped.filter((task) => task.completed).length);
     this.renderScrapedSection(container as HTMLElement, "Ignored", ignoredScraped, scopedIgnoredScraped.length, true, ignoredTaskNotes);
     this.renderSection(container as HTMLElement, "History", done, true);
+  }
+
+  private renderDailyConsole(
+    parent: HTMLElement,
+    activeFilePath: string | null,
+    folderPath: string | null,
+    currentFileTasks: ScrapedTask[],
+    activeTasks: ScrapedTask[],
+    overdueCount: number,
+    upcomingCount: number,
+  ): void {
+    const consoleEl = parent.createDiv({ cls: "qr-daily-console" });
+    this.renderDailyFocus(consoleEl, activeTasks, overdueCount, upcomingCount);
+    this.renderCurrentContext(consoleEl, activeFilePath, folderPath, currentFileTasks);
+  }
+
+  private renderDailyFocus(
+    parent: HTMLElement,
+    activeTasks: ScrapedTask[],
+    overdueCount: number,
+    upcomingCount: number,
+  ): void {
+    const panel = parent.createDiv({ cls: "qr-daily-panel qr-daily-panel-primary" });
+    panel.createDiv({ text: overdueCount > 0 ? "Now" : "Next", cls: "qr-daily-kicker" });
+    const firstTask = activeTasks[0] ?? null;
+    const title = overdueCount > 0
+      ? `${overdueCount} overdue reminder${overdueCount === 1 ? "" : "s"}`
+      : firstTask?.text ?? (upcomingCount > 0 ? `${upcomingCount} upcoming reminder${upcomingCount === 1 ? "" : "s"}` : "Nothing needs action");
+    panel.createDiv({ text: title, cls: "qr-daily-title" });
+    panel.createDiv({
+      text: firstTask ? getTaskSourceLineLabel(firstTask) : "Open source notes stay as the truth.",
+      cls: "qr-daily-meta",
+    });
+    if (firstTask) {
+      const source = panel.createEl("button", { text: "Show source", cls: "qr-row-btn qr-daily-action" });
+      source.onclick = () => void this.openTaskSource(firstTask);
+    }
+  }
+
+  private renderCurrentContext(
+    parent: HTMLElement,
+    activeFilePath: string | null,
+    folderPath: string | null,
+    currentFileTasks: ScrapedTask[],
+  ): void {
+    const panel = parent.createDiv({ cls: "qr-daily-panel" });
+    panel.createDiv({ text: "Current note", cls: "qr-daily-kicker" });
+    panel.createDiv({ text: getPathBasename(activeFilePath), cls: "qr-daily-title" });
+    panel.createDiv({
+      text: activeFilePath ? `${currentFileTasks.length} active task${currentFileTasks.length === 1 ? "" : "s"} here` : "Open a note to focus its tasks.",
+      cls: "qr-daily-meta",
+    });
+    if (activeFilePath && this.taskScope !== "active") {
+      const focus = panel.createEl("button", { text: "Focus note", cls: "qr-row-btn qr-daily-action" });
+      focus.onclick = () => this.showActiveFile(activeFilePath, folderPath ?? "");
+    }
   }
 
   private renderFirstRunActions(parent: HTMLElement): void {

@@ -46,7 +46,7 @@
     <main class="qa-ipad-shell qr-view qr-view-dashboard qr-view-has-active-tasks" data-qa="ipad-density-root">
       <header class="qr-view-header">
         <div class="qr-view-title">
-          <h3>Task Manager</h3>
+          <h3>Today</h3>
           <div class="qr-view-summary">547 vault tasks</div>
         </div>
         <div class="qr-view-header-actions">
@@ -56,39 +56,24 @@
         </div>
       </header>
 
-      <section class="qr-view-stats" aria-label="Task stats">
-        <div class="qr-view-stat qr-view-stat-overdue"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Overdue</div></div>
-        <div class="qr-view-stat qr-view-stat-upcoming"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Upcoming</div></div>
-        <div class="qr-view-stat qr-view-stat-visible"><div class="qr-view-stat-number">547</div><div class="qr-view-stat-label">Visible tasks</div></div>
-        <div class="qr-view-stat qr-view-stat-ignored"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Ignored</div></div>
-      </section>
-
-      <section class="qr-task-toolbar" aria-label="Task filters">
-        <input class="qr-task-search" type="search" placeholder="Filter tasks or files">
-        <select class="qr-task-select"><option>Whole vault</option></select>
-        <select class="qr-task-select"><option>All sources</option></select>
-        <select class="qr-task-select"><option>Page order</option></select>
-        <div class="qr-task-filter-count">547 of 547</div>
-      </section>
-
-      <section class="qr-view-section qr-view-section-upcoming qr-view-section-empty" data-qa="empty-upcoming">
-        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
-          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Upcoming</span></span>
-          <span class="qr-view-section-count">0</span>
+      <section class="qr-daily-console" aria-label="Daily console">
+        <div class="qr-daily-panel qr-daily-panel-primary">
+          <div class="qr-daily-kicker">Next</div>
+          <div class="qr-daily-title">Gley equipped</div>
+          <div class="qr-daily-meta">Games/The First Descendant/Gley Build Tasks.md:14</div>
+          <button class="qr-row-btn qr-daily-action" type="button">Show source</button>
         </div>
-        <div class="qr-view-empty">No upcoming reminders.</div>
-      </section>
-
-      <section class="qr-view-section qr-view-section-history qr-view-section-empty" data-qa="empty-history">
-        <div class="qr-view-section-head is-collapsed" role="button" tabindex="0" aria-expanded="false">
-          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>History</span></span>
-          <span class="qr-view-section-count">0</span>
+        <div class="qr-daily-panel">
+          <div class="qr-daily-kicker">Current note</div>
+          <div class="qr-daily-title">Gley Build Tasks.md</div>
+          <div class="qr-daily-meta">28 active tasks here</div>
+          <button class="qr-row-btn qr-daily-action" type="button">Focus note</button>
         </div>
       </section>
 
-      <section class="qr-view-section qr-view-section-vault-tasks" data-qa="vault-tasks">
+      <section class="qr-view-section qr-view-section-now-next" data-qa="vault-tasks">
         <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
-          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Vault tasks</span></span>
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Now / Next</span></span>
           <span class="qr-view-section-count">547/547</span>
         </div>
         <div class="qr-task-note-head">
@@ -121,6 +106,36 @@
             </article>
           </div>
         </article>
+      </section>
+
+      <section class="qr-task-toolbar" aria-label="Task filters">
+        <input class="qr-task-search" type="search" placeholder="Filter tasks or files">
+        <select class="qr-task-select"><option>Whole vault</option></select>
+        <select class="qr-task-select"><option>All sources</option></select>
+        <select class="qr-task-select"><option>Page order</option></select>
+        <div class="qr-task-filter-count">547 of 547</div>
+      </section>
+
+      <section class="qr-view-stats" aria-label="Task stats">
+        <div class="qr-view-stat qr-view-stat-overdue"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Overdue</div></div>
+        <div class="qr-view-stat qr-view-stat-upcoming"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Upcoming</div></div>
+        <div class="qr-view-stat qr-view-stat-visible"><div class="qr-view-stat-number">547</div><div class="qr-view-stat-label">Visible tasks</div></div>
+        <div class="qr-view-stat qr-view-stat-ignored"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Ignored</div></div>
+      </section>
+
+      <section class="qr-view-section qr-view-section-upcoming qr-view-section-empty" data-qa="empty-upcoming">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Upcoming</span></span>
+          <span class="qr-view-section-count">0</span>
+        </div>
+        <div class="qr-view-empty">No upcoming reminders.</div>
+      </section>
+
+      <section class="qr-view-section qr-view-section-history qr-view-section-empty" data-qa="empty-history">
+        <div class="qr-view-section-head is-collapsed" role="button" tabindex="0" aria-expanded="false">
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>History</span></span>
+          <span class="qr-view-section-count">0</span>
+        </div>
       </section>
     </main>
   </body>

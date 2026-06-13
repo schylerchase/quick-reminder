@@ -130,27 +130,35 @@ test("iPad dashboard shows real task work before empty reminder furniture", asyn
 
   const emptySections = page.locator(".qr-view-section-empty");
   await expect(emptySections).toHaveCount(2);
+  await expect(page.getByText("Now / Next")).toBeVisible();
+  await expect(page.getByText("Current note")).toBeVisible();
 
   const layout = await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>("[data-qa='ipad-density-root']");
+    const dailyConsole = document.querySelector<HTMLElement>(".qr-daily-console");
     const firstTask = document.querySelector<HTMLElement>("[data-qa='first-task']");
+    const toolbar = document.querySelector<HTMLElement>(".qr-task-toolbar");
     const visibleEmptySections = Array.from(
       document.querySelectorAll<HTMLElement>(".qr-view-section-empty"),
     ).filter((section) => getComputedStyle(section).display !== "none");
 
-    if (!root || !firstTask) {
+    if (!root || !dailyConsole || !firstTask || !toolbar) {
       throw new Error("iPad density fixture is missing required nodes");
     }
 
     return {
+      dailyConsoleOffset: dailyConsole.getBoundingClientRect().top - root.getBoundingClientRect().top,
       firstTaskOffset: firstTask.getBoundingClientRect().top - root.getBoundingClientRect().top,
+      toolbarOffset: toolbar.getBoundingClientRect().top - root.getBoundingClientRect().top,
       visibleEmptySectionCount: visibleEmptySections.length,
       rootOverflows: root.scrollWidth > root.clientWidth,
     };
   });
 
+  expect(layout.dailyConsoleOffset).toBeLessThan(layout.firstTaskOffset);
   expect(layout.visibleEmptySectionCount).toBe(0);
-  expect(layout.firstTaskOffset).toBeLessThan(360);
+  expect(layout.firstTaskOffset).toBeLessThan(330);
+  expect(layout.toolbarOffset).toBeGreaterThan(layout.firstTaskOffset);
   expect(layout.rootOverflows).toBe(false);
 });
 

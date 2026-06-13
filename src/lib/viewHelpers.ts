@@ -125,6 +125,15 @@ export function getTaskScopeLabel(
   return "vault tasks";
 }
 
+export function getPathBasename(path: string | null): string {
+  if (!path) return "No active note";
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+export function getTaskSourceLineLabel(task: ScrapedTask): string {
+  return `${task.filePath}:${task.line}`;
+}
+
 export function isInFolder(filePath: string, folderPath: string): boolean {
   if (folderPath === "" || folderPath === "/" || folderPath === ".") {
     return !filePath.includes("/");
