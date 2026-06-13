@@ -54,6 +54,21 @@ export function shouldUseMobileTaskViewport(): boolean {
   return window.matchMedia("(max-width: 480px)").matches;
 }
 
+export function getDashboardSectionClassNames(title: string, isEmpty: boolean): string[] {
+  const classes = ["qr-view-section", `qr-view-section-${getDashboardSectionSlug(title)}`];
+  if (isEmpty) classes.push("qr-view-section-empty");
+  return classes;
+}
+
+function getDashboardSectionSlug(title: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "section";
+}
+
 export function mapTaskKindToStatusPick(task: ScrapedTask): TaskStatusPick {
   if (task.kind !== "checkbox") return "todo";
   if (task.status === "completed") return "completed";

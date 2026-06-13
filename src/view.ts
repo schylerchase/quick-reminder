@@ -168,6 +168,7 @@ import {
   formatWhen,
   genReminderId,
   getCurrentFolderScopePath,
+  getDashboardSectionClassNames,
   getEmptyScrapedText,
   getEmptyText,
   getPhaseAccentHue,
@@ -371,7 +372,9 @@ export class ReminderView extends ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("qr-view");
-    container.toggleClass("qr-view-dashboard", this.isMainWorkspaceView());
+    const isMainWorkspaceView = this.isMainWorkspaceView();
+    container.toggleClass("qr-view-dashboard", isMainWorkspaceView);
+    container.toggleClass("qr-view-sidebar", !isMainWorkspaceView);
     container.toggleClass("qr-mobile-compact-tasks", this.shouldUseMobileTaskLayout());
 
     const pending = this.store.pending;
@@ -389,6 +392,7 @@ export class ReminderView extends ItemView {
     const unignoredScraped = scraped.filter((task) => !ignoredTaskIds.has(task.id));
     const filteredScraped = this.getFilteredScrapedTasks(unignoredScraped);
     const activeScraped = this.sortScrapedTasks(filteredScraped.filter((task) => !task.completed));
+    container.toggleClass("qr-view-has-active-tasks", activeScraped.length > 0);
     const completedScraped = this.sortScrapedTasks(filteredScraped.filter((task) => task.completed));
     const vaultActiveTaskCount = this.getFilteredScrapedTasks(
       this.scrapedTasks.filter((task) => !ignoredTaskIds.has(task.id)),
@@ -418,7 +422,7 @@ export class ReminderView extends ItemView {
       action: () => this.scanDashboardTasks(),
     });
 
-    if (this.isMainWorkspaceView()) {
+    if (isMainWorkspaceView) {
       const sidebarBtn = headerActions.createEl("button", { text: "Sidebar", cls: "qr-view-secondary-btn" });
       this.wireHeaderActionButton(sidebarBtn, {
         busyText: "Opening...",
@@ -772,7 +776,7 @@ export class ReminderView extends ItemView {
     items: Reminder[],
     isHistory: boolean,
   ): void {
-    const section = parent.createDiv({ cls: "qr-view-section" });
+    const section = parent.createDiv({ cls: getDashboardSectionClassNames(title, items.length === 0) });
     const collapsed = this.isSectionCollapsed(title);
     this.renderSectionHead(section, title, String(items.length), collapsed);
     if (collapsed) return;
@@ -1083,7 +1087,8 @@ export class ReminderView extends ItemView {
     ignoredTaskNotes: Readonly<Record<string, string>> = {},
     emptyTaskAction: ScopedEmptyTaskAction | null = null,
   ): void {
-    const section = parent.createDiv({ cls: "qr-view-section" });
+    const isEmpty = tasks.length === 0 && totalCount === 0 && emptyTaskAction === null;
+    const section = parent.createDiv({ cls: getDashboardSectionClassNames(title, isEmpty) });
     const collapsed = this.isSectionCollapsed(title);
     this.renderSectionHead(section, title, `${tasks.length}/${totalCount}`, collapsed);
     if (collapsed) return;

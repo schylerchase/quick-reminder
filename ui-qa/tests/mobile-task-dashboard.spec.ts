@@ -15,6 +15,9 @@ const scopedEmptyScenarioUrl = pathToFileURL(
 const taskReminderContextScenarioUrl = pathToFileURL(
   path.join(__dirname, "../scenarios/task-reminder-context.html"),
 ).toString();
+const ipadDensityScenarioUrl = pathToFileURL(
+  path.join(__dirname, "../scenarios/ipad-dashboard-density.html"),
+).toString();
 
 test.beforeEach(async ({ page }) => {
   await page.goto(scenarioUrl);
@@ -119,6 +122,63 @@ test("linked task reminder context is visible before expanding mobile actions", 
 
   const overflows = await task.evaluate((el) => el.scrollWidth > el.clientWidth);
   expect(overflows).toBe(false);
+});
+
+test("iPad dashboard shows real task work before empty reminder furniture", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto(ipadDensityScenarioUrl);
+
+  const emptySections = page.locator(".qr-view-section-empty");
+  await expect(emptySections).toHaveCount(2);
+
+  const layout = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>("[data-qa='ipad-density-root']");
+    const firstTask = document.querySelector<HTMLElement>("[data-qa='first-task']");
+    const visibleEmptySections = Array.from(
+      document.querySelectorAll<HTMLElement>(".qr-view-section-empty"),
+    ).filter((section) => getComputedStyle(section).display !== "none");
+
+    if (!root || !firstTask) {
+      throw new Error("iPad density fixture is missing required nodes");
+    }
+
+    return {
+      firstTaskOffset: firstTask.getBoundingClientRect().top - root.getBoundingClientRect().top,
+      visibleEmptySectionCount: visibleEmptySections.length,
+      rootOverflows: root.scrollWidth > root.clientWidth,
+    };
+  });
+
+  expect(layout.visibleEmptySectionCount).toBe(0);
+  expect(layout.firstTaskOffset).toBeLessThan(360);
+  expect(layout.rootOverflows).toBe(false);
+});
+
+test("iPad split pane does not allow horizontal panning near the narrow breakpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto(ipadDensityScenarioUrl);
+
+  const layout = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>("[data-qa='ipad-density-root']");
+    if (!root) throw new Error("iPad density fixture is missing the root");
+
+    root.style.width = "600px";
+    const overflowing = Array.from(root.querySelectorAll<HTMLElement>("*"))
+      .filter((element) => element.scrollWidth > element.clientWidth + 1)
+      .map((element) => ({
+        className: element.className,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+
+    return {
+      rootOverflows: root.scrollWidth > root.clientWidth,
+      overflowing,
+    };
+  });
+
+  expect(layout.rootOverflows).toBe(false);
+  expect(layout.overflowing).toEqual([]);
 });
 
 test("show source closes the mobile drawer", async ({ page }) => {

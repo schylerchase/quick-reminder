@@ -610,6 +610,10 @@
   padding: 1.25em 1.5em 2em;
 }
 
+.qr-view-sidebar {
+  padding-top: 0.72em;
+}
+
 /* Header */
 .qr-view-header {
   display: flex;
@@ -648,6 +652,12 @@
   flex-shrink: 0;
 }
 .qr-view-header-actions button { min-width: 0; }
+
+.qr-view-sidebar .qr-view-header {
+  gap: 0.5em;
+  margin-bottom: 0.58em;
+  padding-bottom: 0.48em;
+}
 
 .qr-view-add-btn,
 .qr-view-secondary-btn {
@@ -695,6 +705,11 @@
 .qr-view-dashboard .qr-view-stat { padding: 0.85em 0.9em; }
 .qr-view-dashboard .qr-view-stat-number { font-size: 1.6em; }
 .qr-view-dashboard .qr-view-stat-label { font-size: 0.74em; }
+
+.qr-view-sidebar .qr-view-stats {
+  gap: 4px;
+  margin-bottom: 0.55em;
+}
 
 .qr-view-stat {
   position: relative;
@@ -760,6 +775,11 @@
   align-self: center;
 }
 
+.qr-view-sidebar .qr-task-toolbar {
+  gap: 0.35em;
+  margin-bottom: 0.65em;
+}
+
 .qr-task-search,
 .qr-task-select {
   width: 100%;
@@ -807,6 +827,14 @@
 /* Sections */
 .qr-view-section { margin-bottom: 1em; }
 .qr-view-dashboard .qr-view-section { margin-bottom: 1.4em; }
+.qr-view-sidebar .qr-view-section { margin-bottom: 0.72em; }
+
+.qr-view-section-empty.qr-view-section-history,
+.qr-view-section-empty.qr-view-section-completed-vault-tasks,
+.qr-view-section-empty.qr-view-section-ignored,
+.qr-view-has-active-tasks .qr-view-section-empty.qr-view-section-upcoming {
+  display: none;
+}
 
 .qr-view-section-head {
   display: flex;
@@ -837,6 +865,10 @@
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--text-muted);
+}
+
+.qr-view-sidebar .qr-view-section-head {
+  margin-bottom: 0.35em;
 }
 
 .qr-view-section-caret {
@@ -1580,11 +1612,11 @@
   .qr-view-dashboard .qr-view-stat-number { font-size: 1.15em; }
   .qr-view-dashboard .qr-view-stat-label { font-size: 0.66em; }
   .qr-view-dashboard .qr-task-toolbar {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 0.45fr)) auto;
   }
-  .qr-view-dashboard .qr-task-search { grid-column: 1 / -1; }
+  .qr-view-dashboard .qr-task-search { grid-column: auto; }
   .qr-view-dashboard .qr-task-filter-count {
-    grid-column: 1 / -1;
+    grid-column: auto;
     text-align: right;
   }
   .qr-view-dashboard .qr-view-section { margin-bottom: 1em; }
@@ -1607,6 +1639,17 @@
     grid-column: 1 / -1;
     width: 100%;
     white-space: normal;
+  }
+}
+
+@container (max-width: 560px) {
+  .qr-view-dashboard .qr-task-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .qr-view-dashboard .qr-task-search { grid-column: 1 / -1; }
+  .qr-view-dashboard .qr-task-filter-count {
+    grid-column: 1 / -1;
+    text-align: right;
   }
 }
 

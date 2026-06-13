@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick Reminder iPad Density QA</title>
+    <link rel="stylesheet" href="../../styles.css">
+    <style>
+      :root {
+        --background-primary: #111318;
+        --background-secondary: #1b1f27;
+        --background-modifier-border: #343a46;
+        --background-modifier-hover: #252b35;
+        --interactive-accent: #265fbf;
+        --text-normal: #eef1f6;
+        --text-muted: #a7afbf;
+        --text-faint: #8d98aa;
+        --text-accent: #8fb7ff;
+        --text-success: #71d99b;
+        --text-warning: #ffb75d;
+        --text-error: #ff6f8a;
+        --font-ui-small: 13px;
+        --font-ui-smaller: 11px;
+        --font-monospace: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--background-primary);
+        color: var(--text-normal);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .qa-ipad-shell {
+        width: 744px;
+        min-height: 720px;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body class="theme-dark is-mobile">
+    <main class="qa-ipad-shell qr-view qr-view-dashboard qr-view-has-active-tasks" data-qa="ipad-density-root">
+      <header class="qr-view-header">
+        <div class="qr-view-title">
+          <h3>Task Manager</h3>
+          <div class="qr-view-summary">547 vault tasks</div>
+        </div>
+        <div class="qr-view-header-actions">
+          <button class="qr-view-secondary-btn" type="button">Scan</button>
+          <button class="qr-view-secondary-btn" type="button">Sidebar</button>
+          <button class="qr-view-add-btn" type="button">New</button>
+        </div>
+      </header>
+
+      <section class="qr-view-stats" aria-label="Task stats">
+        <div class="qr-view-stat qr-view-stat-overdue"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Overdue</div></div>
+        <div class="qr-view-stat qr-view-stat-upcoming"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Upcoming</div></div>
+        <div class="qr-view-stat qr-view-stat-visible"><div class="qr-view-stat-number">547</div><div class="qr-view-stat-label">Visible tasks</div></div>
+        <div class="qr-view-stat qr-view-stat-ignored"><div class="qr-view-stat-number">0</div><div class="qr-view-stat-label">Ignored</div></div>
+      </section>
+
+      <section class="qr-task-toolbar" aria-label="Task filters">
+        <input class="qr-task-search" type="search" placeholder="Filter tasks or files">
+        <select class="qr-task-select"><option>Whole vault</option></select>
+        <select class="qr-task-select"><option>All sources</option></select>
+        <select class="qr-task-select"><option>Page order</option></select>
+        <div class="qr-task-filter-count">547 of 547</div>
+      </section>
+
+      <section class="qr-view-section qr-view-section-upcoming qr-view-section-empty" data-qa="empty-upcoming">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Upcoming</span></span>
+          <span class="qr-view-section-count">0</span>
+        </div>
+        <div class="qr-view-empty">No upcoming reminders.</div>
+      </section>
+
+      <section class="qr-view-section qr-view-section-history qr-view-section-empty" data-qa="empty-history">
+        <div class="qr-view-section-head is-collapsed" role="button" tabindex="0" aria-expanded="false">
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>History</span></span>
+          <span class="qr-view-section-count">0</span>
+        </div>
+      </section>
+
+      <section class="qr-view-section qr-view-section-vault-tasks" data-qa="vault-tasks">
+        <div class="qr-view-section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="qr-view-section-label"><span class="qr-view-section-caret"></span><span>Vault tasks</span></span>
+          <span class="qr-view-section-count">547/547</span>
+        </div>
+        <div class="qr-task-note-head">
+          <div class="qr-task-note-title">Games/The First Descendant/Gley Build Tasks.md</div>
+          <button class="qr-note-add-category-button" type="button">+ Category</button>
+        </div>
+        <article class="qr-phase-card">
+          <div class="qr-phase-head" role="button" tabindex="0" aria-expanded="true">
+            <span class="qr-phase-caret"></span>
+            <span class="qr-phase-title">Auto Tracked</span>
+            <span class="qr-phase-pill qr-phase-pill-open">Open</span>
+            <span class="qr-phase-progress"><span class="qr-phase-bar qr-progress-bar" style="--qr-progress: 0%"></span></span>
+            <span class="qr-phase-count">0/9</span>
+          </div>
+          <div class="qr-phase-body">
+            <article class="qr-view-row qr-scraped-row qr-task-status-todo" data-qa="first-task">
+              <div class="qr-view-row-body">
+                <div class="qr-task-badges">
+                  <span class="qr-task-badge qr-task-status-badge qr-task-status-todo">To Do</span>
+                  <span class="qr-task-badge qr-task-kind-badge">Checkbox</span>
+                </div>
+                <div class="qr-view-row-text qr-task-main-text">Gley equipped</div>
+                <div class="qr-view-row-when">Line 14</div>
+              </div>
+              <div class="qr-view-row-actions">
+                <button class="qr-row-btn" type="button">Show</button>
+                <button class="qr-row-btn" type="button">Note</button>
+                <button class="qr-row-btn qr-progress-btn" type="button">In progress</button>
+              </div>
+            </article>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
