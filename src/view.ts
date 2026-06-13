@@ -185,6 +185,7 @@ import {
   hasFutureDueAt,
   isInFolder,
   normalizeContextNoteLines,
+  shouldUseNativeTaskEditingSurface,
   shouldUseMobileTaskViewport,
   splitTaskInput,
   type TaskPhaseGroup,
@@ -2016,9 +2017,8 @@ export class ReminderView extends ItemView {
           ),
       });
 
-      // Inline edit — always available. Falls back to Tasks plugin modal
-      // when that integration is wired, otherwise swaps the row text to an
-      // input and rewrites the source line on Enter.
+      // Inline edit is always available. Desktop can delegate to the Tasks
+      // plugin editor, while mobile stays in Quick Reminder native row editor.
       const editBtn = actions.createEl("button", {
         text: "Edit",
         cls: "qr-row-btn",
@@ -2026,10 +2026,7 @@ export class ReminderView extends ItemView {
       this.wireTaskRowActionButton(editBtn, {
         busyText: "Opening...",
         action: async () => {
-          if (
-            this.store.settings.tasksIntegrationEnabled &&
-            getTasksPluginApi(this.app) !== null
-          ) {
+          if (this.canOpenTasksPluginEditor()) {
             await this.editWithTasksPlugin(task);
           } else {
             this.startInlineTaskEdit(row, task);
@@ -2278,10 +2275,7 @@ export class ReminderView extends ItemView {
   }
 
   private openTaskContextNoteEditor(task: ScrapedTask): void {
-    const tasksApi = this.store.settings.tasksIntegrationEnabled
-      ? getTasksPluginApi(this.app)
-      : null;
-    const escapeHatch = tasksApi
+    const escapeHatch = this.canOpenTasksPluginEditor()
       ? () => {
           void this.editWithTasksPlugin(task);
         }
@@ -2391,14 +2385,16 @@ export class ReminderView extends ItemView {
             });
         });
 
-        menu.addItem((item) => {
-          item
-            .setTitle("Edit task")
-            .setIcon("pencil")
-            .onClick(() => {
-              void this.editWithTasksPlugin(task);
-            });
-        });
+        if (this.canOpenTasksPluginEditor()) {
+          menu.addItem((item) => {
+            item
+              .setTitle("Edit task")
+              .setIcon("pencil")
+              .onClick(() => {
+                void this.editWithTasksPlugin(task);
+              });
+          });
+        }
       }
 
       if (isIgnored) {
@@ -2876,6 +2872,14 @@ export class ReminderView extends ItemView {
     if (!result.changed) return;
 
     new Notice(getTaskUpdatedNotice());
+  }
+
+  private canOpenTasksPluginEditor(): boolean {
+    return (
+      !shouldUseNativeTaskEditingSurface() &&
+      this.store.settings.tasksIntegrationEnabled &&
+      getTasksPluginApi(this.app) !== null
+    );
   }
 
   private deleteTask(task: ScrapedTask): void {

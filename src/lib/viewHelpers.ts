@@ -54,6 +54,16 @@ export function shouldUseMobileTaskViewport(): boolean {
   return window.matchMedia("(max-width: 480px)").matches;
 }
 
+export function shouldUseNativeTaskEditingSurface(): boolean {
+  if (
+    typeof document !== "undefined" &&
+    document.body.classList.contains("is-mobile")
+  ) {
+    return true;
+  }
+  return shouldUseMobileTaskViewport();
+}
+
 export function getDashboardSectionClassNames(title: string, isEmpty: boolean): string[] {
   const classes = ["qr-view-section", `qr-view-section-${getDashboardSectionSlug(title)}`];
   if (isEmpty) classes.push("qr-view-section-empty");

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { shouldUseMobileTaskViewport } from "../src/lib/viewHelpers";
+import * as viewHelpers from "../src/lib/viewHelpers";
+
+const { shouldUseMobileTaskViewport } = viewHelpers;
 
 test.afterEach(() => {
   delete (globalThis as typeof globalThis & { document?: unknown }).document;
@@ -19,6 +21,30 @@ test("mobile task layout stays enabled for phone class and narrow viewports", ()
 
   installViewport({ bodyClasses: [], matchesNarrow: true });
   assert.equal(shouldUseMobileTaskViewport(), true);
+});
+
+test("task editing uses Quick Reminder native surface on iPad-class Obsidian mobile", () => {
+  const shouldUseNativeTaskEditingSurface = (
+    viewHelpers as typeof viewHelpers & {
+      shouldUseNativeTaskEditingSurface?: () => boolean;
+    }
+  ).shouldUseNativeTaskEditingSurface;
+  assert.equal(typeof shouldUseNativeTaskEditingSurface, "function");
+
+  installViewport({ bodyClasses: ["is-mobile"], matchesNarrow: false });
+  assert.equal(shouldUseNativeTaskEditingSurface(), true);
+});
+
+test("task editing can use external Tasks plugin editor on desktop surfaces", () => {
+  const shouldUseNativeTaskEditingSurface = (
+    viewHelpers as typeof viewHelpers & {
+      shouldUseNativeTaskEditingSurface?: () => boolean;
+    }
+  ).shouldUseNativeTaskEditingSurface;
+  assert.equal(typeof shouldUseNativeTaskEditingSurface, "function");
+
+  installViewport({ bodyClasses: [], matchesNarrow: false });
+  assert.equal(shouldUseNativeTaskEditingSurface(), false);
 });
 
 function installViewport(options: {
